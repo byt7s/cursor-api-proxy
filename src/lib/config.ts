@@ -81,6 +81,11 @@ export type BridgeConfig = {
   admissionWaitMs: number;
   /** Log compact per-request latency spans (see CURSOR_BRIDGE_LATENCY_WATERFALL). */
   latencyWaterfall: boolean;
+  /**
+   * Thought channel policy (CURSOR_BRIDGE_THOUGHT_MODE):
+   * drop (default) or map to OpenAI reasoning_content.
+   */
+  thoughtMode: "drop" | "reasoning";
 };
 
 export function loadBridgeConfig(opts: EnvOptions = {}): BridgeConfig {
@@ -142,5 +147,6 @@ export function loadBridgeConfig(opts: EnvOptions = {}): BridgeConfig {
     maxConcurrentRunsPerAccount: env.maxConcurrentRunsPerAccount,
     admissionWaitMs: env.admissionWaitMs,
     latencyWaterfall: env.latencyWaterfall,
+    thoughtMode: env.thoughtMode,
   };
 }

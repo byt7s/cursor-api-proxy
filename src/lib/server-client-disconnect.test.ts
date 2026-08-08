@@ -63,6 +63,7 @@ function createTestConfig(
     maxConcurrentRunsPerAccount: 2,
     admissionWaitMs: 0,
     latencyWaterfall: true,
+    thoughtMode: "drop",
     ...overrides,
   };
 }
