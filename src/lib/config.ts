@@ -3,6 +3,7 @@ import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 
 import type { ApiKeyEntry } from "./api-keys.js";
+import type { ConfigFileState } from "./config-file.js";
 import type { ExecutionEngine } from "./execution-engine.js";
 import type { CursorExecutionMode } from "./execution-mode.js";
 import { loadEnvConfig, resolveAgentCommand, type EnvOptions } from "./env.js";
@@ -47,6 +48,8 @@ export type BridgeConfig = {
   maxBodyBytes: number;
   /** Allowed browser origins; empty means no CORS headers are emitted. */
   corsOrigins: string[];
+  /** Config-file layer: path, contents, warnings and per-key value sources. */
+  configFile: ConfigFileState;
   defaultModel: string;
   mode: CursorExecutionMode;
   force: boolean;
@@ -133,7 +136,7 @@ export function loadBridgeConfig(opts: EnvOptions = {}): BridgeConfig {
   const apiKey = envSource.CURSOR_API_KEY ?? envSource.CURSOR_AUTH_TOKEN;
   const acpArgs = acpResolved.args;
 
-  for (const warning of env.apiKeyWarnings) {
+  for (const warning of [...env.configFile.warnings, ...env.apiKeyWarnings]) {
     console.warn(`[config] ${warning}`);
   }
 
@@ -159,6 +162,7 @@ export function loadBridgeConfig(opts: EnvOptions = {}): BridgeConfig {
     auditLogMaxBytes: env.auditLogMaxBytes,
     maxBodyBytes: env.maxBodyBytes,
     corsOrigins: env.corsOrigins,
+    configFile: env.configFile,
     defaultModel: env.defaultModel,
     mode: env.mode ?? opts.mode ?? "ask",
     force: env.force,

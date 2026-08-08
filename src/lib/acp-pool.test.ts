@@ -1,3 +1,4 @@
+import { EMPTY_CONFIG_FILE_STATE } from "./config-file.js";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 
@@ -56,6 +57,7 @@ function testConfig(overrides: Partial<BridgeConfig> = {}): BridgeConfig {
     auditLogMaxBytes: 1_000_000,
     maxBodyBytes: 8 * 1024 * 1024,
     corsOrigins: [],
+    configFile: EMPTY_CONFIG_FILE_STATE,
     requestsLogEnabled: false,
     requestsLogMaxBytes: 1_000_000,
     metricsEnabled: true,

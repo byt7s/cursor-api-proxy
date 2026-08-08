@@ -10,6 +10,13 @@ import {
   DEFAULT_AUDIT_LOG_MAX_BYTES,
   defaultAuditLogPath,
 } from "./audit-log.js";
+import {
+  computeConfigSources,
+  configFileEnvOverlay,
+  readConfigFile,
+  resolveConfigFilePath,
+  type ConfigFileState,
+} from "./config-file.js";
 import { parseCorsOrigins } from "./cors.js";
 import {
   parseExecutionEngine,
@@ -31,6 +38,10 @@ export type EnvOptions = {
   platform?: NodeJS.Platform;
   /** CLI `--mode` (overridden by CURSOR_BRIDGE_MODE when set). */
   mode?: CursorExecutionMode;
+  /** CLI `--verbose`; wins over the environment and the config file. */
+  verbose?: boolean;
+  /** Skip the config file entirely (used when resolving a nested command). */
+  skipConfigFile?: boolean;
 };
 
 export type LoadedEnv = {
@@ -57,6 +68,8 @@ export type LoadedEnv = {
   maxBodyBytes: number;
   /** Origins allowed for browser cross-origin calls (empty = CORS off). */
   corsOrigins: string[];
+  /** The config-file layer: path, contents, warnings and per-key sources. */
+  configFile: ConfigFileState;
   defaultModel: string;
   force: boolean;
   approveMcps: boolean;
@@ -371,9 +384,50 @@ function discoverAccountDirs(homeDir: string | undefined): string[] {
   }
 }
 
+/**
+ * Environment first, config file underneath. Only the names the file layer
+ * knows about can appear in the overlay, so `HOME`, `CURSOR_API_KEY` and
+ * anything else sensitive can never be shadowed by a file.
+ */
+function overlayConfigFile(
+  env: EnvSource,
+  overlay: Record<string, string>,
+): EnvSource {
+  if (Object.keys(overlay).length === 0) return env;
+  const merged: EnvSource = { ...overlay };
+  for (const [name, value] of Object.entries(env)) {
+    if (value != null && String(value).trim() !== "") merged[name] = value;
+  }
+  return merged;
+}
+
 export function loadEnvConfig(opts: EnvOptions = {}): LoadedEnv {
-  const env = getEnvSource(opts.env);
+  const rawEnv = getEnvSource(opts.env);
   const cwd = getCwd(opts.cwd);
+
+  const configFilePath = resolveConfigFilePath(
+    envString(rawEnv, ["CURSOR_BRIDGE_CONFIG_FILE"]),
+    envString(rawEnv, ["HOME", "USERPROFILE"]),
+    cwd,
+  );
+  const parsedFile = opts.skipConfigFile
+    ? { path: configFilePath, exists: false, values: {}, warnings: [] }
+    : readConfigFile(configFilePath);
+
+  // From here on `env` is the merged view: real environment on top, file below.
+  const env = overlayConfigFile(rawEnv, configFileEnvOverlay(parsedFile.values));
+
+  const configFile: ConfigFileState = {
+    path: parsedFile.path,
+    exists: parsedFile.exists,
+    values: parsedFile.values,
+    warnings: parsedFile.warnings,
+    sources: computeConfigSources(
+      rawEnv,
+      parsedFile.values,
+      opts.verbose === true ? ["verbose"] : [],
+    ),
+  };
 
   const host =
     envString(env, ["CURSOR_BRIDGE_HOST"]) ??
@@ -455,7 +509,12 @@ export function loadEnvConfig(opts: EnvOptions = {}): LoadedEnv {
     "CURSOR_BRIDGE_CHAT_ONLY_WORKSPACE",
   );
 
-  const mode = tryParseExecutionModeEnv(firstDefined(env, ["CURSOR_BRIDGE_MODE"]));
+  // Long-standing exception to "CLI wins": CURSOR_BRIDGE_MODE overrides
+  // `--mode`. The config file sits below the flag like every other key.
+  const mode =
+    tryParseExecutionModeEnv(firstDefined(rawEnv, ["CURSOR_BRIDGE_MODE"])) ??
+    opts.mode ??
+    tryParseExecutionModeEnv(firstDefined(env, ["CURSOR_BRIDGE_MODE"]));
 
   return {
     agentBin:
@@ -492,6 +551,7 @@ export function loadEnvConfig(opts: EnvOptions = {}): LoadedEnv {
       envNumber(env, ["CURSOR_BRIDGE_MAX_BODY_BYTES"], DEFAULT_MAX_BODY_BYTES),
     ),
     corsOrigins: parseCorsOrigins(envString(env, ["CURSOR_BRIDGE_CORS_ORIGINS"])),
+    configFile,
     defaultModel: normalizeModelId(
       envString(env, ["CURSOR_BRIDGE_DEFAULT_MODEL"]),
     ),
@@ -533,7 +593,8 @@ export function loadEnvConfig(opts: EnvOptions = {}): LoadedEnv {
       true,
     ),
     mode,
-    verbose: envBool(env, ["CURSOR_BRIDGE_VERBOSE"], false),
+    // `--verbose` is a flag: it can only turn logging on, never off.
+    verbose: opts.verbose === true || envBool(env, ["CURSOR_BRIDGE_VERBOSE"], false),
     maxMode: envBool(env, ["CURSOR_BRIDGE_MAX_MODE"], false),
     promptViaStdin: envBool(env, ["CURSOR_BRIDGE_PROMPT_VIA_STDIN"], false),
     useAcp: envBool(env, ["CURSOR_BRIDGE_USE_ACP"], true),

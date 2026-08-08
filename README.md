@@ -204,12 +204,45 @@ const client = new OpenAI({
 
 **Usage / token fields:** Responses may include `usage` token fields (`prompt_tokens`/`completion_tokens` for Chat Completions, `input_tokens`/`output_tokens` for Responses). These are **heuristic estimates** (character count ÷ 4), not Cursor billing meters. Do not use them for invoicing.
 
+## Configuration file and precedence
+
+Everything below can also live in a JSON file, so a long-running install does not need a wrapper script full of `export` lines. The file is read once at startup from `~/.cursor-api-proxy/config.json` (override with `CURSOR_BRIDGE_CONFIG_FILE`); if it does not exist, nothing changes.
+
+| Layer | Wins over | Example |
+|-------|-----------|---------|
+| **1. CLI flags** | everything below | `cursor-api-proxy --verbose` |
+| **2. Environment variables** | file and defaults | `CURSOR_BRIDGE_PORT=9000` |
+| **3. Config file** | defaults | `{ "port": 9000 }` |
+| **4. Built-in defaults** | — | `8765` |
+
+One documented exception survives from before the file existed: **`CURSOR_BRIDGE_MODE` still wins over `--mode`**. The file always loses to both.
+
+Keys are the camelCase form of the variable name — `CURSOR_BRIDGE_DEFAULT_MODEL` → `defaultModel`, `CURSOR_BRIDGE_MAX_CONCURRENT_RUNS_SDK` → `sdkMaxConcurrentRuns`. Unknown keys warn at startup and are ignored; a wrong type or an out-of-range enum is a **startup error naming the key**, the same strictness the environment gets.
+
+```json
+{
+  "port": 9000,
+  "defaultModel": "auto",
+  "defaultEngine": "sdk",
+  "thoughtMode": "reasoning",
+  "toolCalls": true,
+  "maxConcurrentRuns": 24,
+  "sdkMaxConcurrentRuns": 64,
+  "corsOrigins": ["https://chat.example.com"]
+}
+```
+
+**Credentials are refused.** `apiKey`, `apiKeys`, `dashboardKey`, `cursorApiKey`, `cursorAuthToken` and friends throw at startup rather than being silently ignored, so nobody believes they configured auth by editing a JSON file. Keys belong in the environment or a secret manager.
+
+The dashboard **Config** page edits this file: every documented key shows its effective value and its source (`cli` / `env` / `file` / `default`), fields a flag or variable already decides are locked with an explanation, and saving writes atomically (temp file + rename) then lists which values need a restart. Two groups are read-only from the browser even though the file may set them: TLS paths (`tlsCertPath`, `tlsKeyPath`) and account directories (`configDirs`), since pointing those at a new location from a web form is a privilege-escalation shape we do not want.
+
 ## Environment variables
 
-Environment handling is centralized in one module. Aliases, defaults, path resolution, platform fallbacks, and `--tailscale` host behavior are resolved consistently before the server starts.
+Environment handling is centralized in one module. Aliases, defaults, path resolution, platform fallbacks, and `--tailscale` host behavior are resolved consistently before the server starts. Every variable in this table may also be set from the config file above, under its camelCase name.
 
 | Variable | Default | Description |
 |----------|---------|-------------|
+| `CURSOR_BRIDGE_CONFIG_FILE` | `~/.cursor-api-proxy/config.json` | Path to the JSON config file described above. Read at startup only; it cannot be set from the file itself. |
 | `CURSOR_BRIDGE_HOST` | `127.0.0.1` | Bind address |
 | `CURSOR_BRIDGE_PORT` | `8765` | Port |
 | `CURSOR_BRIDGE_API_KEY` | — | If set, require `Authorization: Bearer <key>` (or `x-api-key`) on requests. Treated as a **`chat`**-scoped key. Still opens the dashboard when `CURSOR_BRIDGE_DASHBOARD_KEY` is not set — see [Securing the dashboard](#securing-the-dashboard). |
