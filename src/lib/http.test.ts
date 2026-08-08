@@ -1,7 +1,7 @@
 import { describe, it, expect, vi } from "vitest";
 import { Readable } from "node:stream";
 import { IncomingMessage, ServerResponse } from "node:http";
-import { extractBearerToken, json, readBody } from "./http.js";
+import { BodyTooLargeError, extractBearerToken, json, readBody } from "./http.js";
 
 function mockRequest(headers: Record<string, string | string[] | undefined> = {}): IncomingMessage {
   return {
@@ -100,5 +100,36 @@ describe("readBody", () => {
     const req = mockRequestBody(payload);
     const body = await readBody(req);
     expect(body).toBe(payload);
+  });
+
+  it("rejects with BodyTooLargeError and drains when maxBytes is exceeded", async () => {
+    const stream = Readable.from(["aaaa", "bbbb", "cccc"]);
+    const resume = vi.spyOn(stream, "resume");
+    const req = Object.assign(stream, { headers: {} }) as IncomingMessage;
+
+    const err = await readBody(req, 6).then(
+      () => {
+        throw new Error("expected BodyTooLargeError");
+      },
+      (e: unknown) => e,
+    );
+    expect(err).toBeInstanceOf(BodyTooLargeError);
+    expect(err).toMatchObject({
+      name: "BodyTooLargeError",
+      maxBytes: 6,
+      message: "Request body exceeds 6 bytes",
+    });
+    expect(resume).toHaveBeenCalled();
+  });
+
+  it("accepts bodies that fit exactly within maxBytes", async () => {
+    const req = mockRequestBody("abcdef");
+    await expect(readBody(req, 6)).resolves.toBe("abcdef");
+  });
+
+  it("ignores the limit when maxBytes is 0", async () => {
+    const payload = "x".repeat(10_000);
+    const req = mockRequestBody(payload);
+    await expect(readBody(req, 0)).resolves.toBe(payload);
   });
 });
