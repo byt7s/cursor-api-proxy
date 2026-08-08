@@ -264,7 +264,7 @@ Optional per-request overrides:
 - Header **`X-Cursor-Invoke-From: <label>`** (optional) — preferred for **`client=`** (e.g. `claude-cli`, `cursor-claude-extension`).
 - Header **`X-Cursor-Mode: <agent|ask|plan>`** or JSON body field **`mode`** — execution mode for that request (body wins over header).
 
-**CLI subcommands** (see `cursor-api-proxy --help`): `login <name>`, `accounts` (list), `logout`, `usage`, `reset-hwid` (see `--help` for options). Flags above still apply to the server entrypoint.
+**CLI subcommands** (see `cursor-api-proxy --help`): `login <name>`, `set-key <name> <key>`, `accounts` (list), `logout`, `usage`, `reset-hwid` (see `--help` for options). Flags above still apply to the server entrypoint.
 
 ## Multi-Account Setup
 
@@ -288,6 +288,12 @@ npx cursor-api-proxy login account3
 ```
 
 **Auto-Discovery:** When you start the proxy server normally (`npx cursor-api-proxy`), it will automatically find all accounts under that `accounts` directory and include them in the rotation pool.
+
+You can attach a Dashboard API key to an account that already has a CLI login session (or create a key-only account via `login` → API key). Session JWT is used for plan/usage; the key is kept for key-based agent execution:
+
+```bash
+npx cursor-api-proxy set-key account1 crsr_...
+```
 
 Inspect the pool over HTTP with `GET /accounts`.
 

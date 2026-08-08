@@ -27,6 +27,26 @@ export function readAccountApiKey(configDir?: string): string | undefined {
 }
 
 /**
+ * True when the account dir has a CLI/browser login session (real authInfo),
+ * not an API-key-only stub config.
+ */
+export function hasAccountSessionAuth(configDir: string): boolean {
+  const configFile = path.join(configDir, "cli-config.json");
+  if (!fs.existsSync(configFile)) return false;
+  try {
+    const raw = JSON.parse(fs.readFileSync(configFile, "utf-8")) as {
+      authMethod?: string;
+      authInfo?: { email?: string; authId?: string };
+    };
+    if (raw.authMethod === "api-key") return false;
+    if (raw.authInfo?.authId?.startsWith("api-key:")) return false;
+    return Boolean(raw.authInfo?.email);
+  } catch {
+    return false;
+  }
+}
+
+/**
  * Env vars to inject when spawning the Cursor agent for an API-key account.
  *
  * `AGENT_CLI_CREDENTIAL_STORE=file` is required on macOS: even with `--api-key`,
@@ -61,6 +81,10 @@ export function withAccountApiKeyArgs(
   return ["--api-key", key, ...args];
 }
 
+/**
+ * True when the account has a stored API key file or an API-key stub config.
+ * Dual-cred session accounts with a key file also return true.
+ */
 export function isApiKeyAccount(configDir: string): boolean {
   if (fs.existsSync(path.join(configDir, API_KEY_FILE))) return true;
   try {
@@ -78,8 +102,27 @@ export function isApiKeyAccount(configDir: string): boolean {
 }
 
 /**
+ * Store or replace `.cursor-api-key` only — does not touch session `cli-config.json`
+ * or a session JWT in `.cursor-token`.
+ */
+export function writeAccountApiKey(configDir: string, apiKey: string): void {
+  const key = apiKey.trim();
+  if (!key) {
+    throw new Error("API key must not be empty");
+  }
+
+  fs.mkdirSync(configDir, { recursive: true });
+  fs.writeFileSync(path.join(configDir, API_KEY_FILE), key, {
+    encoding: "utf-8",
+    mode: 0o600,
+  });
+}
+
+/**
  * Persist an API-key-backed account under the given config directory.
- * Creates `.cursor-api-key`, `.cursor-token`, and a minimal `cli-config.json`.
+ * Creates `.cursor-api-key` and, for key-only accounts, `.cursor-token` plus a
+ * minimal `cli-config.json`. When a CLI session already exists, only the key
+ * file is written so usage/plan keep working from the session JWT.
  */
 export function writeApiKeyAccount(
   configDir: string,
@@ -91,12 +134,12 @@ export function writeApiKeyAccount(
     throw new Error("API key must not be empty");
   }
 
-  fs.mkdirSync(configDir, { recursive: true });
+  writeAccountApiKey(configDir, key);
 
-  fs.writeFileSync(path.join(configDir, API_KEY_FILE), key, {
-    encoding: "utf-8",
-    mode: 0o600,
-  });
+  if (hasAccountSessionAuth(configDir)) {
+    return { configDir, name, authMethod: "api-key" };
+  }
+
   writeCachedToken(configDir, key);
 
   const cliConfig = {
@@ -119,16 +162,7 @@ export function writeApiKeyAccount(
 /** True when the account dir has either browser auth or a stored API key. */
 export function hasAccountCredentials(configDir: string): boolean {
   if (readAccountApiKey(configDir)) return true;
-  const configFile = path.join(configDir, "cli-config.json");
-  if (!fs.existsSync(configFile)) return false;
-  try {
-    const config = JSON.parse(fs.readFileSync(configFile, "utf-8")) as {
-      authInfo?: { email?: string };
-    };
-    return Boolean(config?.authInfo?.email);
-  } catch {
-    return false;
-  }
+  return hasAccountSessionAuth(configDir);
 }
 
 export { TOKEN_FILE };

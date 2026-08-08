@@ -5,9 +5,11 @@ import { afterEach, describe, expect, it } from "vitest";
 import {
   API_KEY_FILE,
   getAccountApiKeyEnv,
+  hasAccountSessionAuth,
   isApiKeyAccount,
   readAccountApiKey,
   withAccountApiKeyArgs,
+  writeAccountApiKey,
   writeApiKeyAccount,
 } from "./account-api-key.js";
 import { TOKEN_FILE } from "./token-cache.js";
@@ -86,5 +88,36 @@ describe("account-api-key", () => {
     expect(
       withAccountApiKeyArgs(["--api-key", "already", "--print"], tmp),
     ).toEqual(["--api-key", "already", "--print"]);
+  });
+
+  it("stores API key on a session account without clobbering cli-config or JWT", () => {
+    tmp = fs.mkdtempSync(path.join(os.tmpdir(), "cap-dual-"));
+    const configDir = path.join(tmp, "work");
+    fs.mkdirSync(configDir, { recursive: true });
+    const sessionConfig = {
+      authMethod: "cli",
+      authInfo: {
+        email: "work@example.com",
+        displayName: "Work",
+        authId: "auth0|user-1",
+      },
+    };
+    fs.writeFileSync(
+      path.join(configDir, "cli-config.json"),
+      JSON.stringify(sessionConfig, null, 2),
+    );
+    const jwt = "aaa.bbb.ccc";
+    fs.writeFileSync(path.join(configDir, TOKEN_FILE), jwt);
+
+    writeAccountApiKey(configDir, "crsr_attached");
+    writeApiKeyAccount(configDir, "work", "crsr_via_write_api_key_account");
+
+    expect(readAccountApiKey(configDir)).toBe("crsr_via_write_api_key_account");
+    expect(hasAccountSessionAuth(configDir)).toBe(true);
+    expect(isApiKeyAccount(configDir)).toBe(true);
+    expect(fs.readFileSync(path.join(configDir, TOKEN_FILE), "utf-8")).toBe(jwt);
+    expect(
+      JSON.parse(fs.readFileSync(path.join(configDir, "cli-config.json"), "utf-8")),
+    ).toEqual(sessionConfig);
   });
 });

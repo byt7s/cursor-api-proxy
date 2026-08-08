@@ -2,8 +2,9 @@ import fs from "node:fs";
 import path from "node:path";
 
 import {
-  isApiKeyAccount,
+  hasAccountSessionAuth,
   readAccountApiKey,
+  writeAccountApiKey,
 } from "../lib/account-api-key.js";
 import { ACCOUNTS_DIR } from "./constants.js";
 import {
@@ -52,6 +53,8 @@ export type AccountReport = {
   configDir: string;
   authenticated: boolean;
   authMethod: "cli" | "api-key" | null;
+  /** True when `.cursor-api-key` is present (may coexist with a CLI session). */
+  hasApiKey: boolean;
   email: string | null;
   displayName: string | null;
   /** Present for API-key accounts when `/v1/me` succeeds. */
@@ -64,8 +67,9 @@ export type AccountReport = {
   expiresAt: string | null;
   usage: AccountUsagePayload | null;
   /**
-   * Why plan/usage is missing. Agent API keys cannot call Cursor billing APIs
-   * (`api_key_unsupported`); use CLI/browser login for session JWT data.
+   * Why plan/usage is missing. Key-only accounts cannot call Cursor billing
+   * APIs (`api_key_unsupported`). Dual-cred accounts with a session JWT fetch
+   * plan/usage from the session and still enrich key metadata via `/v1/me`.
    */
   usageError: string | null;
 };
@@ -84,8 +88,13 @@ export type AccountsReport = {
  */
 export function readAccountInfo(name: string, configDir: string): AccountInfo {
   const info: AccountInfo = { name, configDir, authenticated: false };
+  const hasApiKey = Boolean(readAccountApiKey(configDir));
+  const hasSession = hasAccountSessionAuth(configDir);
 
-  if (isApiKeyAccount(configDir)) {
+  // Session/login wins for authMethod when both credentials exist (dual-cred).
+  if (hasSession) {
+    info.authMethod = "cli";
+  } else if (hasApiKey) {
     info.authMethod = "api-key";
   }
 
@@ -105,12 +114,19 @@ export function readAccountInfo(name: string, configDir: string): AccountInfo {
       authMethod?: string;
       authInfo?: { email?: string; displayName?: string; authId?: string };
     };
-    if (raw.authMethod === "api-key" || info.authMethod === "api-key") {
+    if (hasSession) {
+      info.authMethod = "cli";
+    } else if (raw.authMethod === "api-key" || hasApiKey) {
       info.authMethod = "api-key";
     } else if (raw.authInfo) {
       info.authMethod = "cli";
     }
-    if (raw.authInfo) {
+    if (raw.authInfo && info.authMethod === "cli") {
+      info.authenticated = true;
+      info.email = raw.authInfo.email;
+      info.displayName = raw.authInfo.displayName;
+      info.authId = raw.authInfo.authId;
+    } else if (raw.authInfo && info.authMethod === "api-key") {
       info.authenticated = true;
       info.email = raw.authInfo.email;
       info.displayName = raw.authInfo.displayName;
@@ -183,6 +199,23 @@ function discoverAccountNames(accountsDir: string = ACCOUNTS_DIR): string[] {
     .map((e) => e.name);
 }
 
+function resolveSessionToken(
+  info: AccountInfo,
+  keychainToken: string | undefined,
+): string | undefined {
+  const cachedToken = readCachedToken(info.configDir);
+  if (cachedToken && isSessionAccessToken(cachedToken)) return cachedToken;
+
+  const keychainMatchesAccount =
+    !!keychainToken &&
+    !!info.authId &&
+    tokenSub(keychainToken) === info.authId;
+  if (keychainMatchesAccount && keychainToken && isSessionAccessToken(keychainToken)) {
+    return keychainToken;
+  }
+  return undefined;
+}
+
 async function loadLiveAccountData(
   info: AccountInfo,
   keychainToken: string | undefined,
@@ -193,37 +226,50 @@ async function loadLiveAccountData(
   usageError: string | null;
 }> {
   const apiKey = readAccountApiKey(info.configDir);
-  if (info.authMethod === "api-key" || (apiKey && !isSessionAccessToken(apiKey))) {
-    const key = apiKey ?? readCachedToken(info.configDir);
-    const apiKeyProfile = key ? await fetchApiKeyProfile(key) : null;
+  const apiKeyForProfile =
+    apiKey && !isSessionAccessToken(apiKey) ? apiKey : undefined;
+  const apiKeyProfilePromise = apiKeyForProfile
+    ? fetchApiKeyProfile(apiKeyForProfile)
+    : Promise.resolve(null);
+
+  // Dual-cred: prefer session JWT for plan/usage even when `.cursor-api-key` exists.
+  const sessionToken = resolveSessionToken(info, keychainToken);
+  if (sessionToken) {
+    try {
+      const [liveUsage, liveProfile, apiKeyProfile] = await Promise.all([
+        fetchAccountUsage(sessionToken),
+        fetchStripeProfile(sessionToken),
+        apiKeyProfilePromise,
+      ]);
+      return {
+        liveProfile,
+        liveUsage,
+        apiKeyProfile,
+        usageError: liveUsage ? null : "usage_unavailable",
+      };
+    } catch {
+      return {
+        liveProfile: null,
+        liveUsage: null,
+        apiKeyProfile: await apiKeyProfilePromise,
+        usageError: "fetch_failed",
+      };
+    }
+  }
+
+  // Key-only (no session JWT): enrich via /v1/me; billing APIs unavailable.
+  if (apiKeyForProfile) {
     return {
       liveProfile: null,
       liveUsage: null,
-      apiKeyProfile,
-      // Billing/plan/usage need a session JWT — not available via agent API keys.
+      apiKeyProfile: await apiKeyProfilePromise,
       usageError: "api_key_unsupported",
     };
   }
 
   const cachedToken = readCachedToken(info.configDir);
-  const keychainMatchesAccount =
-    !!keychainToken &&
-    !!info.authId &&
-    tokenSub(keychainToken) === info.authId;
-  const token =
-    cachedToken ?? (keychainMatchesAccount ? keychainToken : undefined);
-
-  if (!token) {
-    return {
-      liveProfile: null,
-      liveUsage: null,
-      apiKeyProfile: null,
-      usageError: "no_token",
-    };
-  }
-
-  if (!isSessionAccessToken(token)) {
-    const apiKeyProfile = await fetchApiKeyProfile(token);
+  if (cachedToken && !isSessionAccessToken(cachedToken)) {
+    const apiKeyProfile = await fetchApiKeyProfile(cachedToken);
     return {
       liveProfile: null,
       liveUsage: null,
@@ -232,25 +278,12 @@ async function loadLiveAccountData(
     };
   }
 
-  try {
-    const [liveUsage, liveProfile] = await Promise.all([
-      fetchAccountUsage(token),
-      fetchStripeProfile(token),
-    ]);
-    return {
-      liveProfile,
-      liveUsage,
-      apiKeyProfile: null,
-      usageError: liveUsage ? null : "usage_unavailable",
-    };
-  } catch {
-    return {
-      liveProfile: null,
-      liveUsage: null,
-      apiKeyProfile: null,
-      usageError: "fetch_failed",
-    };
-  }
+  return {
+    liveProfile: null,
+    liveUsage: null,
+    apiKeyProfile: null,
+    usageError: "no_token",
+  };
 }
 
 function toUsagePayload(usage: UsageData): AccountUsagePayload {
@@ -271,16 +304,24 @@ function toAccountReport(
   usageError: string | null,
 ): AccountReport {
   const planFromLive = liveProfile ? describePlan(liveProfile) : null;
-  const email = apiKeyProfile?.userEmail || info.email || null;
+  const hasApiKey = Boolean(readAccountApiKey(info.configDir));
+  // Session accounts keep login email; key-only prefer /v1/me when present.
+  const email =
+    info.authMethod === "cli"
+      ? info.email || apiKeyProfile?.userEmail || null
+      : apiKeyProfile?.userEmail || info.email || null;
   const displayName =
-    apiKeyProfile?.apiKeyName
-      ? `API key (${apiKeyProfile.apiKeyName})`
-      : info.displayName ?? null;
+    info.authMethod === "cli"
+      ? info.displayName ?? null
+      : apiKeyProfile?.apiKeyName
+        ? `API key (${apiKeyProfile.apiKeyName})`
+        : info.displayName ?? null;
   return {
     name: info.name,
     configDir: info.configDir,
     authenticated: info.authenticated,
     authMethod: info.authMethod ?? null,
+    hasApiKey,
     email,
     displayName,
     apiKeyName: apiKeyProfile?.apiKeyName ?? null,
@@ -347,14 +388,16 @@ export function formatAccountsReportText(report: AccountsReport): string {
     }
     if (account.authMethod === "api-key") {
       out.push(`     🔐 Auth: API key`);
-      if (account.apiKeyName) {
-        out.push(`     🏷️  Key: ${account.apiKeyName}`);
-      }
-      if (account.apiKeyCreatedAt) {
-        out.push(`     🗓️  Key created: ${account.apiKeyCreatedAt}`);
-      }
+    } else if (account.hasApiKey) {
+      out.push(`     🔐 Auth: Cursor CLI + API key`);
     } else {
       out.push(`     🔐 Auth: Cursor CLI`);
+    }
+    if (account.apiKeyName) {
+      out.push(`     🏷️  Key: ${account.apiKeyName}`);
+    }
+    if (account.apiKeyCreatedAt) {
+      out.push(`     🗓️  Key created: ${account.apiKeyCreatedAt}`);
     }
     if (account.plan && !account.membershipType) {
       const canceled =
@@ -393,6 +436,43 @@ export async function handleAccountsList(): Promise<void> {
   const report = await buildAccountsReport();
   const text = formatAccountsReportText(report);
   process.stdout.write(text.endsWith("\n") ? text : `${text}\n`);
+}
+
+/**
+ * Attach or replace a Dashboard API key on an existing account directory.
+ * Preserves CLI session files so plan/usage keep using the session JWT.
+ */
+export function handleSetKey(accountName: string, apiKey: string): void {
+  if (!accountName || !apiKey) {
+    console.error(
+      "❌ Error: Usage: cursor-api-proxy set-key <account-name> <api-key>",
+    );
+    process.exit(1);
+  }
+
+  if (!apiKey.startsWith("crsr_")) {
+    console.error(
+      "❌ Error: that does not look like a Dashboard API key (expected a 'crsr_' prefix).",
+    );
+    console.error("   Create one at Cursor Dashboard → Integrations.");
+    process.exit(1);
+  }
+
+  const configDir = path.join(ACCOUNTS_DIR, accountName);
+  if (!fs.existsSync(configDir)) {
+    console.error(`❌ Account '${accountName}' not found.`);
+    console.error(`   Run 'cursor-api-proxy login ${accountName}' first.`);
+    process.exit(1);
+  }
+
+  writeAccountApiKey(configDir, apiKey);
+  if (hasAccountSessionAuth(configDir)) {
+    console.log(
+      `✅ API key saved for '${accountName}' (CLI session preserved for usage/plan).`,
+    );
+  } else {
+    console.log(`✅ API key saved for '${accountName}'.`);
+  }
 }
 
 export async function handleLogout(accountName: string): Promise<void> {

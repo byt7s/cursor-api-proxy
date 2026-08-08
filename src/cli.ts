@@ -8,7 +8,11 @@ import { loadBridgeConfig } from "./lib/config.js";
 import { loadEnvConfig } from "./lib/env.js";
 import { startBridgeServer, setupGracefulShutdown } from "./lib/server.js";
 import { parseArgs, printHelp } from "./cli/args.js";
-import { handleAccountsList, handleLogout } from "./cli/accounts.js";
+import {
+  handleAccountsList,
+  handleLogout,
+  handleSetKey,
+} from "./cli/accounts.js";
 import { handleLogin } from "./cli/login.js";
 import { handleRequests } from "./cli/requests.js";
 import { handleResetHwid } from "./cli/reset-hwid.js";
@@ -57,6 +61,11 @@ async function main(): Promise<void> {
 
   if (args.logout) {
     await handleLogout(args.accountName);
+    return;
+  }
+
+  if (args.setKey) {
+    handleSetKey(args.accountName, args.apiKey);
     return;
   }
 

@@ -1,5 +1,9 @@
 import * as fs from "node:fs";
 
+import {
+  hasAccountSessionAuth,
+  readAccountApiKey,
+} from "./account-api-key.js";
 import { runAcpStream, runAcpSync } from "./acp-client.js";
 import type { BridgeConfig } from "./config.js";
 import type { CursorExecutionMode } from "./execution-mode.js";
@@ -7,10 +11,21 @@ import { run, runStreaming } from "./process.js";
 import { getChatOnlyEnvOverrides } from "./workspace.js";
 import { readKeychainToken, writeCachedToken } from "./token-cache.js";
 
+/** Session JWTs are 3-part; agent API keys are `crsr_…` (see usage.ts). */
+function isSessionJwt(token: string): boolean {
+  if (!token || token.startsWith("crsr_")) return false;
+  const parts = token.split(".");
+  return parts.length === 3 && parts[0]!.length > 0 && parts[1]!.length > 0;
+}
+
 function cacheTokenForAccount(configDir?: string): void {
   if (!configDir) return;
   const token = readKeychainToken();
-  if (token) writeCachedToken(configDir, token);
+  if (!token || !isSessionJwt(token)) return;
+  // Key-only accounts keep the API key in `.cursor-token`; don't replace it
+  // with an unrelated Keychain JWT. Dual-cred session accounts still refresh.
+  if (readAccountApiKey(configDir) && !hasAccountSessionAuth(configDir)) return;
+  writeCachedToken(configDir, token);
 }
 
 export type AgentRunResult = {
