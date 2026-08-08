@@ -2,6 +2,7 @@ import * as fs from "node:fs";
 
 import {
   getAccountApiKeyEnv,
+  hasAccountSessionAuth,
   readAccountApiKey,
   withAccountApiKeyArgs,
 } from "./account-api-key.js";
@@ -43,12 +44,21 @@ async function withAdmission<T>(
   }
 }
 
+/** Session JWTs are 3-part; agent API keys are `crsr_…` (see usage.ts). */
+function isSessionJwt(token: string): boolean {
+  if (!token || token.startsWith("crsr_")) return false;
+  const parts = token.split(".");
+  return parts.length === 3 && parts[0]!.length > 0 && parts[1]!.length > 0;
+}
+
 function cacheTokenForAccount(configDir?: string): void {
   if (!configDir) return;
-  // API-key accounts already store the key; don't overwrite with keychain JWT.
-  if (readAccountApiKey(configDir)) return;
   const token = readKeychainToken();
-  if (token) writeCachedToken(configDir, token);
+  if (!token || !isSessionJwt(token)) return;
+  // Key-only accounts keep the API key in `.cursor-token`; don't replace it
+  // with an unrelated Keychain JWT. Dual-cred session accounts still refresh.
+  if (readAccountApiKey(configDir) && !hasAccountSessionAuth(configDir)) return;
+  writeCachedToken(configDir, token);
 }
 
 function applyAccountApiKeyToAcp(
@@ -65,6 +75,8 @@ export type AgentRunResult = {
   code: number;
   stdout: string;
   stderr: string;
+  /** Thought channel text (route decides drop vs reasoning_content). */
+  reasoning?: string;
 };
 
 function acpArgsWithModel(acpArgs: string[], model: string): string[] {
@@ -233,6 +245,7 @@ export function runAgentStream(
   stdinPrompt?: string,
   configDir?: string,
   signal?: AbortSignal,
+  onThought?: StreamLineHandler,
 ): Promise<{ code: number; stderr: string }> {
   return withAdmission(config, configDir, signal, () =>
     runAgentStreamUnlocked(
@@ -245,6 +258,7 @@ export function runAgentStream(
       stdinPrompt,
       configDir,
       signal,
+      onThought,
     ),
   );
 }
@@ -259,6 +273,7 @@ function runAgentStreamUnlocked(
   stdinPrompt?: string,
   configDir?: string,
   signal?: AbortSignal,
+  onThought?: StreamLineHandler,
 ): Promise<{ code: number; stderr: string }> {
   if (config.useAcp && typeof stdinPrompt === "string") {
     const acpModel = extractModelFromCmdArgs(cmdArgs);
@@ -277,6 +292,7 @@ function runAgentStreamUnlocked(
             signal,
           },
           onLine,
+          onThought,
         )
         .then((result) => {
           cacheTokenForAccount(configDir);
@@ -319,6 +335,7 @@ function runAgentStreamUnlocked(
         signal,
       },
       onLine,
+      onThought,
     ).then((result) => {
       cacheTokenForAccount(configDir);
       cleanupTemp(tempDir);
