@@ -18,7 +18,6 @@ import {
 } from "../openai.js";
 import {
   logAgentError,
-  logAccountAssigned,
   logAccountStats,
   logModelResolution,
   logTrafficRequest,
@@ -30,24 +29,18 @@ import { resolveRequestMode } from "../resolve-mode.js";
 import { resolveWorkspace } from "../workspace.js";
 import { buildBridgeContextPreamble, BRIDGE_AGENT_PROMPT_SEPARATOR } from "../bridge-context-preamble.js";
 import { sanitizeMessages } from "../sanitize.js";
+import { getAccountStats } from "../account-pool.js";
 import {
-  getNextAccountConfigDir,
-  reportRequestStart,
-  reportRequestEnd,
-  reportRateLimit,
-  reportRequestSuccess,
-  reportRequestError,
-  getAccountStats,
-} from "../account-pool.js";
+  ALL_ACCOUNTS_DISABLED_MESSAGE,
+  ALL_ACCOUNTS_RATE_LIMITED_MESSAGE,
+  runStreamWithAccountFailover,
+  runSyncWithAccountFailover,
+} from "../account-failover.js";
 import { abortOnClientDisconnect } from "../client-disconnect.js";
 import {
   fitPromptToWinCmdline,
   warnPromptTruncated,
 } from "../win-cmdline-limit.js";
-
-function isRateLimited(stderr: string): boolean {
-  return /\b429\b|rate.?limit|too many requests/i.test(stderr);
-}
 
 export type ChatCompletionsCtx = {
   config: BridgeConfig;
@@ -195,262 +188,348 @@ export async function handleChatCompletions(
     : undefined;
 
   if (body.stream) {
-    const configDir = getNextAccountConfigDir();
-    logAccountAssigned(configDir);
-    reportRequestStart(configDir);
-    const streamStart = Date.now();
-
     const abortController = new AbortController();
     abortOnClientDisconnect(res, abortController);
-
-    writeSseHeaders(res, truncatedHeaders);
     res.on("error", () => {
       /* client disconnected mid-stream */
     });
 
+    let headersWritten = false;
+    const ensureHeaders = () => {
+      if (!headersWritten) {
+        headersWritten = true;
+        writeSseHeaders(res, truncatedHeaders);
+      }
+    };
+
+    const writeChatChunk = (content: string) => {
+      res.write(
+        `data: ${JSON.stringify({
+          id,
+          object: "chat.completion.chunk",
+          created,
+          model: displayModel,
+          choices: [
+            { index: 0, delta: { content }, finish_reason: null },
+          ],
+        })}\n\n`,
+      );
+    };
+
+    const finishChatStream = (accumulated: string) => {
+      logTrafficResponse(
+        config.verbose,
+        model ?? cursorModel,
+        accumulated,
+        true,
+      );
+      const promptTokens = Math.max(1, Math.round(agentPrompt.length / 4));
+      const completionTokens = Math.max(1, Math.round(accumulated.length / 4));
+      res.write(
+        `data: ${JSON.stringify({
+          id,
+          object: "chat.completion.chunk",
+          created,
+          model: displayModel,
+          choices: [{ index: 0, delta: {}, finish_reason: "stop" }],
+          usage: {
+            prompt_tokens: promptTokens,
+            completion_tokens: completionTokens,
+            total_tokens: promptTokens + completionTokens,
+          },
+        })}\n\n`,
+      );
+      res.write("data: [DONE]\n\n");
+    };
+
     if (config.useAcp && typeof promptForAgent === "string") {
       let accumulated = "";
-      runAgentStream(
-        config,
-        workspaceDir,
-        effectiveChatOnly,
-        cmdArgs,
-        (chunk) => {
-          accumulated += chunk;
-          res.write(
-            `data: ${JSON.stringify({
-              id,
-              object: "chat.completion.chunk",
-              created,
-              model: displayModel,
-              choices: [
-                { index: 0, delta: { content: chunk }, finish_reason: null },
-              ],
-            })}\n\n`,
-          );
-        },
-        tempDir,
-        promptForAgent,
-        configDir,
-        abortController.signal,
-      )
-        .then(({ code, stderr: stderrOut }) => {
-          const latencyMs = Date.now() - streamStart;
-          reportRequestEnd(configDir);
+      try {
+        const outcome = await runStreamWithAccountFailover({
+          signal: abortController.signal,
+          onCommit: ensureHeaders,
+          onChunk: (chunk) => {
+            accumulated += chunk;
+            writeChatChunk(chunk);
+          },
+          runOnce: (configDir, onChunk) =>
+            runAgentStream(
+              config,
+              workspaceDir,
+              effectiveChatOnly,
+              cmdArgs,
+              onChunk,
+              tempDir,
+              promptForAgent,
+              configDir,
+              abortController.signal,
+            ),
+        });
 
-          if (stderrOut && isRateLimited(stderrOut)) {
-            reportRateLimit(configDir, 60000);
-          }
+        if (outcome.status === "aborted") {
+          if (headersWritten) res.end();
+          return;
+        }
 
-          if (abortController.signal.aborted) {
-            /* client disconnected — do not count as success or failure */
-          } else if (code !== 0) {
-            reportRequestError(configDir, latencyMs);
-            const publicMsg = logAgentError(
-              config.sessionsLogPath,
-              method,
-              pathname,
-              remoteAddress,
-              code,
-              stderrOut,
-            );
-            res.write(
-              `data: ${JSON.stringify({
-                error: { message: publicMsg, code: "cursor_cli_error" },
-              })}\n\n`,
-            );
-            res.write("data: [DONE]\n\n");
-            logAccountStats(config.verbose, getAccountStats());
-            res.end();
-            return;
-          } else {
-            reportRequestSuccess(configDir, latencyMs);
-          }
-          logAccountStats(config.verbose, getAccountStats());
-          logTrafficResponse(
-            config.verbose,
-            model ?? cursorModel,
-            accumulated,
-            true,
-          );
-          const promptTokens = Math.max(1, Math.round(agentPrompt.length / 4));
-          const completionTokens = Math.max(
-            1,
-            Math.round(accumulated.length / 4),
-          );
-          res.write(
-            `data: ${JSON.stringify({
-              id,
-              object: "chat.completion.chunk",
-              created,
-              model: displayModel,
-              choices: [{ index: 0, delta: {}, finish_reason: "stop" }],
-              usage: {
-                prompt_tokens: promptTokens,
-                completion_tokens: completionTokens,
-                total_tokens: promptTokens + completionTokens,
+        if (outcome.status === "all_rate_limited") {
+          if (!headersWritten) {
+            json(res, 429, {
+              error: {
+                message: ALL_ACCOUNTS_RATE_LIMITED_MESSAGE,
+                code: "rate_limit_exceeded",
               },
-            })}\n\n`,
-          );
-          res.write("data: [DONE]\n\n");
-          res.end();
-        })
-        .catch((err) => {
-          reportRequestEnd(configDir);
-          if (!abortController.signal.aborted) {
-            reportRequestError(configDir, Date.now() - streamStart);
+            });
+          } else {
             res.write(
               `data: ${JSON.stringify({
                 error: {
-                  message:
-                    "The Cursor agent stream failed. See server logs for details.",
-                  code: "cursor_cli_error",
+                  message: ALL_ACCOUNTS_RATE_LIMITED_MESSAGE,
+                  code: "rate_limit_exceeded",
                 },
               })}\n\n`,
             );
             res.write("data: [DONE]\n\n");
+            res.end();
           }
-          console.error(
-            `[${new Date().toISOString()}] Agent stream error:`,
-            err,
-          );
-          res.end();
-        });
-      return;
-    }
-
-    let accumulated = "";
-    const parseLine = createStreamParser(
-      (text) => {
-        accumulated += text;
-        res.write(
-          `data: ${JSON.stringify({
-            id,
-            object: "chat.completion.chunk",
-            created,
-            model: displayModel,
-            choices: [
-              { index: 0, delta: { content: text }, finish_reason: null },
-            ],
-          })}\n\n`,
-        );
-      },
-      () => {
-        logTrafficResponse(
-          config.verbose,
-          model ?? cursorModel,
-          accumulated,
-          true,
-        );
-        const promptTokens = Math.max(1, Math.round(agentPrompt.length / 4));
-        const completionTokens = Math.max(
-          1,
-          Math.round(accumulated.length / 4),
-        );
-        res.write(
-          `data: ${JSON.stringify({
-            id,
-            object: "chat.completion.chunk",
-            created,
-            model: displayModel,
-            choices: [{ index: 0, delta: {}, finish_reason: "stop" }],
-            usage: {
-              prompt_tokens: promptTokens,
-              completion_tokens: completionTokens,
-              total_tokens: promptTokens + completionTokens,
-            },
-          })}\n\n`,
-        );
-        res.write("data: [DONE]\n\n");
-      },
-    );
-
-    runAgentStream(
-      config,
-      workspaceDir,
-      effectiveChatOnly,
-      cmdArgs,
-      parseLine,
-      tempDir,
-      promptForAgent,
-      configDir,
-      abortController.signal,
-    )
-      .then(({ code, stderr: stderrOut }) => {
-        const latencyMs = Date.now() - streamStart;
-        reportRequestEnd(configDir);
-
-        if (stderrOut && isRateLimited(stderrOut)) {
-          reportRateLimit(configDir, 60000);
+          logAccountStats(config.verbose, getAccountStats());
+          return;
         }
 
-        if (abortController.signal.aborted) {
-          /* client disconnected — do not count as success or failure */
-        } else if (code !== 0) {
-          reportRequestError(configDir, latencyMs);
-          logAgentError(
+        if (outcome.status === "all_disabled") {
+          if (!headersWritten) {
+            json(res, 403, {
+              error: {
+                message: ALL_ACCOUNTS_DISABLED_MESSAGE,
+                code: "no_usable_accounts",
+              },
+            });
+          } else {
+            res.write(
+              `data: ${JSON.stringify({
+                error: {
+                  message: ALL_ACCOUNTS_DISABLED_MESSAGE,
+                  code: "no_usable_accounts",
+                },
+              })}\n\n`,
+            );
+            res.write("data: [DONE]\n\n");
+            res.end();
+          }
+          logAccountStats(config.verbose, getAccountStats());
+          return;
+        }
+
+        if (outcome.status === "error") {
+          ensureHeaders();
+          const publicMsg = logAgentError(
             config.sessionsLogPath,
             method,
             pathname,
             remoteAddress,
-            code,
-            stderrOut,
+            outcome.code,
+            outcome.stderr,
           );
-        } else {
-          reportRequestSuccess(configDir, latencyMs);
+          res.write(
+            `data: ${JSON.stringify({
+              error: { message: publicMsg, code: "cursor_cli_error" },
+            })}\n\n`,
+          );
+          res.write("data: [DONE]\n\n");
+          logAccountStats(config.verbose, getAccountStats());
+          res.end();
+          return;
         }
+
+        ensureHeaders();
+        finishChatStream(accumulated);
         logAccountStats(config.verbose, getAccountStats());
         res.end();
-      })
-      .catch((err) => {
-        reportRequestEnd(configDir);
+      } catch (err) {
         if (!abortController.signal.aborted) {
-          reportRequestError(configDir, Date.now() - streamStart);
+          ensureHeaders();
+          res.write(
+            `data: ${JSON.stringify({
+              error: {
+                message:
+                  "The Cursor agent stream failed. See server logs for details.",
+                code: "cursor_cli_error",
+              },
+            })}\n\n`,
+          );
+          res.write("data: [DONE]\n\n");
         }
         console.error(
           `[${new Date().toISOString()}] Agent stream error:`,
           err,
         );
-        res.end();
+        if (headersWritten) res.end();
+      }
+      return;
+    }
+
+    let accumulated = "";
+    try {
+      const outcome = await runStreamWithAccountFailover({
+        signal: abortController.signal,
+        onCommit: ensureHeaders,
+        onChunk: (text) => {
+          accumulated += text;
+          writeChatChunk(text);
+        },
+        runOnce: (configDir, onChunk) => {
+          const parseLine = createStreamParser(onChunk, () => {
+            /* finish written after successful failover outcome */
+          });
+          return runAgentStream(
+            config,
+            workspaceDir,
+            effectiveChatOnly,
+            cmdArgs,
+            parseLine,
+            tempDir,
+            promptForAgent,
+            configDir,
+            abortController.signal,
+          );
+        },
       });
+
+      if (outcome.status === "aborted") {
+        if (headersWritten) res.end();
+        return;
+      }
+
+      if (outcome.status === "all_rate_limited") {
+        if (!headersWritten) {
+          json(res, 429, {
+            error: {
+              message: ALL_ACCOUNTS_RATE_LIMITED_MESSAGE,
+              code: "rate_limit_exceeded",
+            },
+          });
+        } else {
+          res.end();
+        }
+        logAccountStats(config.verbose, getAccountStats());
+        return;
+      }
+
+      if (outcome.status === "all_disabled") {
+        if (!headersWritten) {
+          json(res, 403, {
+            error: {
+              message: ALL_ACCOUNTS_DISABLED_MESSAGE,
+              code: "no_usable_accounts",
+            },
+          });
+        } else {
+          res.end();
+        }
+        logAccountStats(config.verbose, getAccountStats());
+        return;
+      }
+
+      if (outcome.status === "error") {
+        logAgentError(
+          config.sessionsLogPath,
+          method,
+          pathname,
+          remoteAddress,
+          outcome.code,
+          outcome.stderr,
+        );
+        if (!headersWritten) {
+          json(res, 500, {
+            error: {
+              message:
+                "The Cursor agent process failed. See server logs for details.",
+              code: "cursor_cli_error",
+            },
+          });
+        } else {
+          res.end();
+        }
+        logAccountStats(config.verbose, getAccountStats());
+        return;
+      }
+
+      ensureHeaders();
+      finishChatStream(accumulated);
+      logAccountStats(config.verbose, getAccountStats());
+      res.end();
+    } catch (err) {
+      console.error(
+        `[${new Date().toISOString()}] Agent stream error:`,
+        err,
+      );
+      if (headersWritten) res.end();
+    }
     return;
   }
-
-  const configDir = getNextAccountConfigDir();
-  logAccountAssigned(configDir);
-  reportRequestStart(configDir);
-  const syncStart = Date.now();
 
   const abortController = new AbortController();
   abortOnClientDisconnect(res, abortController);
 
-  const out = await runAgentSync(
-    config,
-    workspaceDir,
-    effectiveChatOnly,
-    cmdArgs,
-    tempDir,
-    promptForAgent,
-    configDir,
+  const outcome = await runSyncWithAccountFailover(
+    (configDir) =>
+      runAgentSync(
+        config,
+        workspaceDir,
+        effectiveChatOnly,
+        cmdArgs,
+        tempDir,
+        promptForAgent,
+        configDir,
+        abortController.signal,
+      ),
     abortController.signal,
   );
-  const syncLatency = Date.now() - syncStart;
-  reportRequestEnd(configDir);
 
-  if (out.stderr && isRateLimited(out.stderr)) {
-    reportRateLimit(configDir, 60000);
+  if (outcome.status === "aborted") {
+    return;
   }
 
-  if (out.code !== 0) {
-    reportRequestError(configDir, syncLatency);
+  if (outcome.status === "all_rate_limited") {
+    logAccountStats(config.verbose, getAccountStats());
+    if (outcome.result) {
+      logAgentError(
+        config.sessionsLogPath,
+        method,
+        pathname,
+        remoteAddress,
+        outcome.result.code,
+        outcome.result.stderr ?? "",
+      );
+    }
+    json(res, 429, {
+      error: {
+        message: ALL_ACCOUNTS_RATE_LIMITED_MESSAGE,
+        code: "rate_limit_exceeded",
+      },
+    });
+    return;
+  }
+
+  if (outcome.status === "all_disabled") {
+    logAccountStats(config.verbose, getAccountStats());
+    json(res, 403, {
+      error: {
+        message: ALL_ACCOUNTS_DISABLED_MESSAGE,
+        code: "no_usable_accounts",
+      },
+    });
+    return;
+  }
+
+  if (outcome.status === "error") {
     logAccountStats(config.verbose, getAccountStats());
     const errMsg = logAgentError(
       config.sessionsLogPath,
       method,
       pathname,
       remoteAddress,
-      out.code,
-      out.stderr,
+      outcome.result.code,
+      outcome.result.stderr ?? "",
     );
     json(res, 500, {
       error: { message: errMsg, code: "cursor_cli_error" },
@@ -458,8 +537,7 @@ export async function handleChatCompletions(
     return;
   }
 
-  reportRequestSuccess(configDir, syncLatency);
-  const content = out.stdout.trim();
+  const content = (outcome.result.stdout ?? "").trim();
   logTrafficResponse(config.verbose, model ?? cursorModel, content, false);
 
   const promptTokens = Math.max(1, Math.round(agentPrompt.length / 4));
