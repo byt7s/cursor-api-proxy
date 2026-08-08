@@ -69,6 +69,20 @@ describe("loadEnvConfig", () => {
     expect(loaded.defaultModel).toBe("claude-3-opus");
   });
 
+  it("parses CURSOR_BRIDGE_THOUGHT_MODE (default drop)", () => {
+    expect(loadEnvConfig({ env: {} }).thoughtMode).toBe("drop");
+    expect(
+      loadEnvConfig({ env: { CURSOR_BRIDGE_THOUGHT_MODE: "reasoning" } })
+        .thoughtMode,
+    ).toBe("reasoning");
+    expect(
+      loadEnvConfig({ env: { CURSOR_BRIDGE_THOUGHT_MODE: "DROP" } }).thoughtMode,
+    ).toBe("drop");
+    expect(
+      loadEnvConfig({ env: { CURSOR_BRIDGE_THOUGHT_MODE: "nope" } }).thoughtMode,
+    ).toBe("drop");
+  });
+
   it("parses CURSOR_BRIDGE_MODE and marks chat-only env as explicit", () => {
     const loaded = loadEnvConfig({
       env: {

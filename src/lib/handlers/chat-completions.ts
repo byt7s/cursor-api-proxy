@@ -45,6 +45,10 @@ import {
   warnPromptTruncated,
 } from "../win-cmdline-limit.js";
 import { LatencyWaterfall } from "../latency-waterfall.js";
+import {
+  thoughtStreamDelta,
+  withReasoningContent,
+} from "../thought-mode.js";
 
 function logLatency(
   config: BridgeConfig,
@@ -286,7 +290,24 @@ export async function handleChatCompletions(
             accumulated += chunk;
             writeChatChunk(chunk);
           },
-          runOnce: (configDir, onChunk) =>
+          ...(config.thoughtMode === "reasoning"
+            ? {
+                onThought: (chunk: string) => {
+                  const delta = thoughtStreamDelta(chunk, "reasoning");
+                  if (!delta) return;
+                  res.write(
+                    `data: ${JSON.stringify({
+                      id,
+                      object: "chat.completion.chunk",
+                      created,
+                      model: displayModel,
+                      choices: [{ index: 0, delta, finish_reason: null }],
+                    })}\n\n`,
+                  );
+                },
+              }
+            : {}),
+          runOnce: (configDir, onChunk, onThought) =>
             runAgentStream(
               config,
               workspaceDir,
@@ -297,6 +318,7 @@ export async function handleChatCompletions(
               promptForAgent,
               configDir,
               abortController.signal,
+              onThought,
             ),
         });
 
@@ -650,6 +672,11 @@ export async function handleChatCompletions(
   const promptTokens = Math.max(1, Math.round(agentPrompt.length / 4));
   const completionTokens = Math.max(1, Math.round(content.length / 4));
   const totalTokens = promptTokens + completionTokens;
+  const message = withReasoningContent(
+    { role: "assistant", content },
+    outcome.result.reasoning,
+    config.thoughtMode,
+  );
 
   latency.mark("shape_done");
   logLatency(config, latency, { ok: true, model: displayModel });
@@ -671,7 +698,7 @@ export async function handleChatCompletions(
       choices: [
         {
           index: 0,
-          message: { role: "assistant", content },
+          message,
           finish_reason: "stop",
         },
       ],

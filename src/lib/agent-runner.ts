@@ -2,7 +2,6 @@ import * as fs from "node:fs";
 
 import {
   getAccountApiKeyEnv,
-  hasAccountSessionAuth,
   readAccountApiKey,
   withAccountApiKeyArgs,
 } from "./account-api-key.js";
@@ -44,21 +43,12 @@ async function withAdmission<T>(
   }
 }
 
-/** Session JWTs are 3-part; agent API keys are `crsr_…` (see usage.ts). */
-function isSessionJwt(token: string): boolean {
-  if (!token || token.startsWith("crsr_")) return false;
-  const parts = token.split(".");
-  return parts.length === 3 && parts[0]!.length > 0 && parts[1]!.length > 0;
-}
-
 function cacheTokenForAccount(configDir?: string): void {
   if (!configDir) return;
+  // API-key accounts already store the key; don't overwrite with keychain JWT.
+  if (readAccountApiKey(configDir)) return;
   const token = readKeychainToken();
-  if (!token || !isSessionJwt(token)) return;
-  // Key-only accounts keep the API key in `.cursor-token`; don't replace it
-  // with an unrelated Keychain JWT. Dual-cred session accounts still refresh.
-  if (readAccountApiKey(configDir) && !hasAccountSessionAuth(configDir)) return;
-  writeCachedToken(configDir, token);
+  if (token) writeCachedToken(configDir, token);
 }
 
 function applyAccountApiKeyToAcp(

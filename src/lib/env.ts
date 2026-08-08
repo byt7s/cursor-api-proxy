@@ -73,6 +73,13 @@ export type LoadedEnv = {
    * Default true (cheap one-line summary). Set CURSOR_BRIDGE_LATENCY_WATERFALL=false to disable.
    */
   latencyWaterfall: boolean;
+  /**
+   * How to surface the agent's thought channel:
+   * - drop: never include in response (default; content stays message-only)
+   * - reasoning: map to OpenAI reasoning_content
+   * See CURSOR_BRIDGE_THOUGHT_MODE.
+   */
+  thoughtMode: "drop" | "reasoning";
 };
 
 export type AgentCommand = {
@@ -121,6 +128,16 @@ function envBool(
     return true;
   if (value === "0" || value === "false" || value === "no" || value === "off")
     return false;
+  return defaultValue;
+}
+
+function envThoughtMode(
+  env: EnvSource,
+  names: string[],
+  defaultValue: "drop" | "reasoning",
+): "drop" | "reasoning" {
+  const raw = envString(env, names)?.toLowerCase();
+  if (raw === "drop" || raw === "reasoning") return raw;
   return defaultValue;
 }
 
@@ -423,6 +440,7 @@ export function loadEnvConfig(opts: EnvOptions = {}): LoadedEnv {
       envNumber(env, ["CURSOR_BRIDGE_ADMISSION_WAIT_MS"], 5000),
     ),
     latencyWaterfall: envBool(env, ["CURSOR_BRIDGE_LATENCY_WATERFALL"], true),
+    thoughtMode: envThoughtMode(env, ["CURSOR_BRIDGE_THOUGHT_MODE"], "drop"),
   };
 }
 
