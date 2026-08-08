@@ -7,6 +7,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { EMPTY_CONFIG_FILE_STATE } from "./config-file.js";
 import type { BridgeConfig } from "./config.js";
 import {
+  dashboardEventSubscriberCount,
   publishDashboardEvent,
   resetDashboardEventBus,
 } from "./event-bus.js";
@@ -144,6 +145,62 @@ describe("GET /api/events", () => {
       expect(buffer).toContain("hello-sse");
 
       await reader.cancel();
+    } finally {
+      await new Promise<void>((resolve) => server.close(() => resolve()));
+    }
+  });
+
+  it("drops the bus subscriber when the SSE client disconnects", async () => {
+    const server = await start(createTestConfig());
+    try {
+      expect(dashboardEventSubscriberCount()).toBe(0);
+      const addr = server.address() as { port: number };
+      const res = await fetch(`http://127.0.0.1:${addr.port}/api/events`);
+      expect(res.status).toBe(200);
+
+      // Wait until the initial status frame proves the handler subscribed.
+      const reader = res.body!.getReader();
+      const decoder = new TextDecoder();
+      let buffer = "";
+      const deadline = Date.now() + 2000;
+      while (!buffer.includes("event: status") && Date.now() < deadline) {
+        const { value, done } = await reader.read();
+        if (done) break;
+        buffer += decoder.decode(value, { stream: true });
+      }
+      expect(dashboardEventSubscriberCount()).toBe(1);
+
+      await reader.cancel();
+
+      const dropDeadline = Date.now() + 2000;
+      while (
+        dashboardEventSubscriberCount() !== 0 &&
+        Date.now() < dropDeadline
+      ) {
+        await new Promise((r) => setTimeout(r, 20));
+      }
+      expect(dashboardEventSubscriberCount()).toBe(0);
+    } finally {
+      await new Promise<void>((resolve) => server.close(() => resolve()));
+    }
+  });
+
+  it("rejects a chat-scoped API key with 403", async () => {
+    const server = await start(
+      createTestConfig({
+        dashboardKey: "dash-secret",
+        apiKeys: [{ label: "ci", scope: "chat", key: "sk-ci" }],
+      }),
+    );
+    try {
+      const addr = server.address() as { port: number };
+      const denied = await fetch(`http://127.0.0.1:${addr.port}/api/events`, {
+        headers: { Authorization: "Bearer sk-ci" },
+      });
+      expect(denied.status).toBe(403);
+      const body = (await denied.json()) as { error?: string };
+      expect(body.error).toContain('scope "chat"');
+      expect(dashboardEventSubscriberCount()).toBe(0);
     } finally {
       await new Promise<void>((resolve) => server.close(() => resolve()));
     }
