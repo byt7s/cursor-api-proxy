@@ -8,6 +8,8 @@ import { runAgentSync, runAgentStream } from "./agent-runner.js";
 import { runAcpStream, runAcpSync } from "./acp-client.js";
 import { writeAccountApiKey, writeApiKeyAccount } from "./account-api-key.js";
 import { shutdownAcpWarmPool } from "./acp-pool.js";
+import { writeAccountEngine } from "./execution-engine.js";
+import { runSdkAgent } from "./sdk-executor.js";
 import { readKeychainToken, writeCachedToken } from "./token-cache.js";
 
 vi.mock("./acp-client.js", () => ({
@@ -23,6 +25,14 @@ vi.mock("./process.js", () => ({
 vi.mock("./token-cache.js", () => ({
   readKeychainToken: vi.fn().mockReturnValue(undefined),
   writeCachedToken: vi.fn(),
+}));
+
+vi.mock("./sdk-executor.js", () => ({
+  runSdkAgent: vi.fn().mockResolvedValue({
+    code: 0,
+    stdout: "sdk-ok",
+    stderr: "",
+  }),
 }));
 
 function config(overrides: Partial<BridgeConfig> = {}): BridgeConfig {
@@ -47,6 +57,7 @@ function config(overrides: Partial<BridgeConfig> = {}): BridgeConfig {
     maxMode: false,
     promptViaStdin: false,
     useAcp: true,
+    defaultEngine: "acp",
     acpSkipAuthenticate: true,
     acpRawDebug: false,
     configDirs: [],
@@ -161,5 +172,76 @@ describe("dual-cred session token refresh", () => {
     );
 
     expect(writeCachedToken).not.toHaveBeenCalled();
+  });
+});
+
+describe("SDK engine path", () => {
+  let tmp: string;
+
+  afterEach(() => {
+    vi.mocked(runSdkAgent).mockClear();
+    vi.mocked(runAcpSync).mockClear();
+    if (tmp) fs.rmSync(tmp, { recursive: true, force: true });
+  });
+
+  it("uses SDK when per-account engine is sdk and API key exists", async () => {
+    tmp = fs.mkdtempSync(path.join(os.tmpdir(), "sdk-engine-"));
+    writeAccountApiKey(tmp, "crsr_test_key");
+    writeAccountEngine(tmp, "sdk");
+
+    const result = await runAgentSync(
+      config({ useAcp: true }),
+      "/tmp/ws",
+      true,
+      ["--print", "--model", "composer-2.5"],
+      undefined,
+      "hello from sdk",
+      tmp,
+    );
+
+    expect(result.stdout).toBe("sdk-ok");
+    expect(runSdkAgent).toHaveBeenCalledTimes(1);
+    expect(vi.mocked(runSdkAgent).mock.calls[0]![0]).toMatchObject({
+      prompt: "hello from sdk",
+      apiKey: "crsr_test_key",
+      cursorModel: "composer-2.5",
+      cwd: "/tmp/ws",
+    });
+    expect(runAcpSync).not.toHaveBeenCalled();
+  });
+
+  it("fails clearly when sdk engine has no API key", async () => {
+    tmp = fs.mkdtempSync(path.join(os.tmpdir(), "sdk-nokey-"));
+    writeAccountEngine(tmp, "sdk");
+
+    const result = await runAgentSync(
+      config({ defaultEngine: "acp" }),
+      "/tmp/ws",
+      true,
+      ["--print"],
+      undefined,
+      "hello",
+      tmp,
+    );
+
+    expect(result).toMatchObject({
+      code: 1,
+      failureText: "sdk_engine_requires_api_key",
+    });
+    expect(runSdkAgent).not.toHaveBeenCalled();
+    expect(runAcpSync).not.toHaveBeenCalled();
+  });
+
+  it("keeps ACP when default engine is acp", async () => {
+    await runAgentSync(
+      config({ defaultEngine: "acp" }),
+      "/tmp/ws",
+      true,
+      ["--print"],
+      undefined,
+      "hello",
+    );
+    expect(runAcpSync).toHaveBeenCalled();
+    expect(runSdkAgent).not.toHaveBeenCalled();
   });
 });

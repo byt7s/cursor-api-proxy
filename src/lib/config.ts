@@ -2,6 +2,7 @@ import * as fs from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 
+import type { ExecutionEngine } from "./execution-engine.js";
 import type { CursorExecutionMode } from "./execution-mode.js";
 import { loadEnvConfig, resolveAgentCommand, type EnvOptions } from "./env.js";
 
@@ -55,6 +56,13 @@ export type BridgeConfig = {
   promptViaStdin: boolean;
   /** When true, use ACP (Agent Client Protocol) over stdio; fixes prompt delivery on Windows. */
   useAcp: boolean;
+  /**
+   * Default engine (`acp` | `sdk`) when an account has no `.cursor-bridge-engine`.
+   * See `CURSOR_BRIDGE_DEFAULT_ENGINE`. SDK requires Node >= 22.13 + API key.
+   */
+  defaultEngine: ExecutionEngine;
+  /** Process-wide Dashboard API key (`CURSOR_API_KEY` / `CURSOR_AUTH_TOKEN`), if set. */
+  cursorApiKey?: string;
   /** Spawn options for ACP (e.g. windowsVerbatimArguments when using cmd.exe fallback). */
   acpSpawnOptions?: { windowsVerbatimArguments?: boolean };
   /** When true, skip ACP authenticate step (use when pre-authenticated via --api-key or agent login). */
@@ -127,6 +135,8 @@ export function loadBridgeConfig(opts: EnvOptions = {}): BridgeConfig {
     maxMode: env.maxMode,
     promptViaStdin: env.promptViaStdin,
     useAcp: env.useAcp,
+    defaultEngine: env.defaultEngine,
+    cursorApiKey: apiKey || undefined,
     acpSpawnOptions:
       acpResolved.windowsVerbatimArguments != null
         ? { windowsVerbatimArguments: acpResolved.windowsVerbatimArguments }
