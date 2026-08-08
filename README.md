@@ -213,6 +213,9 @@ Environment handling is centralized in one module. Aliases, defaults, path resol
 | `CURSOR_CONFIG_DIRS` | — | Comma-separated configuration directories for round-robin account rotation (alias: `CURSOR_ACCOUNT_DIRS`). Auto-discovers authenticated accounts under `~/.cursor-api-proxy/accounts/` when unset. |
 | `CURSOR_BRIDGE_MULTI_PORT` | `false` | When `true` and multiple config dirs are set, spawns a separate server per directory on incrementing ports starting from `CURSOR_BRIDGE_PORT`. |
 | `CURSOR_BRIDGE_PROMPT_VIA_STDIN` | `false` | When `true`, sends the user prompt via **stdin** instead of argv (helps on Windows if argv is truncated). |
+| `CURSOR_BRIDGE_MAX_CONCURRENT_RUNS` | `16` | Max concurrent agent runs (ACP/CLI children) across the whole proxy. Extra requests wait up to `CURSOR_BRIDGE_ADMISSION_WAIT_MS`, then get **503** with `Retry-After`. |
+| `CURSOR_BRIDGE_MAX_CONCURRENT_RUNS_PER_ACCOUNT` | `2` | Max concurrent runs **per account** dir. Usual bottleneck with few accounts — raise to `3`–`4` only if you have RAM headroom; prefer more accounts over a high per-account cap. |
+| `CURSOR_BRIDGE_ADMISSION_WAIT_MS` | `5000` | How long to wait for an admission permit before failing with capacity **503**. |
 | `CURSOR_BRIDGE_USE_ACP` | `true` | When `true` (default), uses **ACP** over stdio (`agent acp`) with a **warm process per account** (new `session/new` each request — no shared chat memory). If every warm worker is busy, spawns a temporary ACP for that prompt. Set `false` to use `agent --print` per request. See [Cursor ACP docs](https://cursor.com/docs/cli/acp). Set `NODE_DEBUG=cursor-api-proxy:acp` to debug. |
 | `CURSOR_BRIDGE_DEFAULT_ENGINE` | `acp` | Default execution engine when an account has no `.cursor-bridge-engine` file. `acp` (default) uses the Cursor agent CLI/ACP path (Node >=18). `sdk` uses in-process `@cursor/sdk` (requires **Node >=22.13** and a Dashboard API key on that account or `CURSOR_API_KEY`). Per-account override: write `sdk` or `acp` to `~/.cursor-api-proxy/accounts/<name>/.cursor-bridge-engine`. |
 | Conversation sticky id | — | Send `X-Cursor-Conversation-Id` (preferred), or JSON `conversation_id`, or an opaque OpenAI `user` value. The proxy pins the same account (and SDK `Agent.resume` when engine=sdk). On account failover the pin is cleared and the client's resent `messages` replay context on a new account. |
@@ -228,6 +231,7 @@ Notes:
 - `--tailscale` changes the default host to `0.0.0.0` only when `CURSOR_BRIDGE_HOST` is not already set.
 - ACP `session/request_permission` uses `reject-once` (least-privilege) so the agent cannot grant file/tool access; intentional for chat-only mode.
 - Relative paths such as `CURSOR_BRIDGE_WORKSPACE`, `CURSOR_BRIDGE_SESSIONS_LOG`, `CURSOR_BRIDGE_TLS_CERT`, and `CURSOR_BRIDGE_TLS_KEY` are resolved from the current working directory.
+- **Admission tuning:** defaults (`16` global / `2` per account) assume heavy ACP/CLI children. If parallel prompts hit **503** / admission capacity, raise `CURSOR_BRIDGE_MAX_CONCURRENT_RUNS_PER_ACCOUNT` modestly **or** add accounts (spreads Cursor rate limits). Raising caps without RAM headroom OOMs the host; many parallel runs on one account also hit upstream rate limits faster. `GET /healthz` (or the admin dashboard) exposes current admission limits and in-use counts.
 
 #### Windows command line limits
 
