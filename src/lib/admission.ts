@@ -1,17 +1,35 @@
 /**
  * Bounded agent-run admission: global + per-account permits with a short wait.
  *
- * Defaults are tuned for ACP/CLI children (much heavier than in-process SDK runs).
- * Raise CURSOR_BRIDGE_MAX_CONCURRENT_RUNS* if you have headroom; lower them to
- * protect memory and upstream rate limits.
+ * ACP/CLI children are heavy — defaults stay conservative (16 / 2).
+ * In-process SDK runs are much lighter — separate higher caps (48 / 12).
+ * Planes do not share counters so SDK load cannot starve ACP (or vice versa).
  */
 
 import path from "node:path";
 
-export type AdmissionConfig = {
+export type AdmissionPlane = "acp" | "sdk";
+
+export type PlaneLimits = {
   maxConcurrentRuns: number;
   maxConcurrentRunsPerAccount: number;
+};
+
+export type AdmissionConfig = {
   waitMs: number;
+  acp: PlaneLimits;
+  sdk: PlaneLimits;
+};
+
+/** Partial configure shape (flat keys configure the ACP plane for back-compat). */
+export type AdmissionConfigInput = {
+  waitMs?: number;
+  maxConcurrentRuns?: number;
+  maxConcurrentRunsPerAccount?: number;
+  sdkMaxConcurrentRuns?: number;
+  sdkMaxConcurrentRunsPerAccount?: number;
+  acp?: Partial<PlaneLimits>;
+  sdk?: Partial<PlaneLimits>;
 };
 
 export type AdmitResult =
@@ -25,6 +43,7 @@ export type AdmitResult =
   | { ok: false; reason: "aborted"; waitMs: number };
 
 type Waiter = {
+  plane: AdmissionPlane;
   accountKey: string;
   started: number;
   deadline: number;
@@ -35,66 +54,138 @@ type Waiter = {
   resolve: (result: AdmitResult) => void;
 };
 
-const DEFAULTS: AdmissionConfig = {
-  maxConcurrentRuns: 16,
-  maxConcurrentRunsPerAccount: 2,
-  waitMs: 5000,
+type PlaneState = {
+  globalInUse: number;
+  perAccountInUse: Map<string, number>;
 };
 
-let cfg: AdmissionConfig = { ...DEFAULTS };
-let globalInUse = 0;
-const perAccountInUse = new Map<string, number>();
+const DEFAULTS: AdmissionConfig = {
+  waitMs: 5000,
+  acp: {
+    maxConcurrentRuns: 16,
+    maxConcurrentRunsPerAccount: 2,
+  },
+  sdk: {
+    maxConcurrentRuns: 48,
+    maxConcurrentRunsPerAccount: 12,
+  },
+};
+
+let cfg: AdmissionConfig = cloneConfig(DEFAULTS);
+const planes: Record<AdmissionPlane, PlaneState> = {
+  acp: { globalInUse: 0, perAccountInUse: new Map() },
+  sdk: { globalInUse: 0, perAccountInUse: new Map() },
+};
 const waiters: Waiter[] = [];
 
-export function configureAdmission(partial: Partial<AdmissionConfig>): void {
-  cfg = {
-    maxConcurrentRuns: Math.max(
-      0,
-      partial.maxConcurrentRuns ?? cfg.maxConcurrentRuns,
-    ),
-    maxConcurrentRunsPerAccount: Math.max(
-      0,
-      partial.maxConcurrentRunsPerAccount ?? cfg.maxConcurrentRunsPerAccount,
-    ),
-    waitMs: Math.max(0, partial.waitMs ?? cfg.waitMs),
+function cloneConfig(c: AdmissionConfig): AdmissionConfig {
+  return {
+    waitMs: c.waitMs,
+    acp: { ...c.acp },
+    sdk: { ...c.sdk },
   };
 }
 
-export function getAdmissionConfig(): AdmissionConfig {
-  return { ...cfg };
+function mergePlane(
+  base: PlaneLimits,
+  partial?: Partial<PlaneLimits>,
+): PlaneLimits {
+  return {
+    maxConcurrentRuns: Math.max(
+      0,
+      partial?.maxConcurrentRuns ?? base.maxConcurrentRuns,
+    ),
+    maxConcurrentRunsPerAccount: Math.max(
+      0,
+      partial?.maxConcurrentRunsPerAccount ?? base.maxConcurrentRunsPerAccount,
+    ),
+  };
+}
+
+export function configureAdmission(partial: AdmissionConfigInput): void {
+  const acpPartial: Partial<PlaneLimits> = {
+    ...partial.acp,
+  };
+  if (partial.maxConcurrentRuns !== undefined) {
+    acpPartial.maxConcurrentRuns = partial.maxConcurrentRuns;
+  }
+  if (partial.maxConcurrentRunsPerAccount !== undefined) {
+    acpPartial.maxConcurrentRunsPerAccount = partial.maxConcurrentRunsPerAccount;
+  }
+
+  const sdkPartial: Partial<PlaneLimits> = {
+    ...partial.sdk,
+  };
+  if (partial.sdkMaxConcurrentRuns !== undefined) {
+    sdkPartial.maxConcurrentRuns = partial.sdkMaxConcurrentRuns;
+  }
+  if (partial.sdkMaxConcurrentRunsPerAccount !== undefined) {
+    sdkPartial.maxConcurrentRunsPerAccount =
+      partial.sdkMaxConcurrentRunsPerAccount;
+  }
+
+  cfg = {
+    waitMs: Math.max(0, partial.waitMs ?? cfg.waitMs),
+    acp: mergePlane(cfg.acp, acpPartial),
+    sdk: mergePlane(cfg.sdk, sdkPartial),
+  };
+}
+
+export function getAdmissionConfig(): AdmissionConfig & {
+  /** @deprecated Prefer `acp.maxConcurrentRuns` — ACP plane (back-compat). */
+  maxConcurrentRuns: number;
+  /** @deprecated Prefer `acp.maxConcurrentRunsPerAccount`. */
+  maxConcurrentRunsPerAccount: number;
+} {
+  return {
+    ...cloneConfig(cfg),
+    maxConcurrentRuns: cfg.acp.maxConcurrentRuns,
+    maxConcurrentRunsPerAccount: cfg.acp.maxConcurrentRunsPerAccount,
+  };
 }
 
 export function resetAdmissionForTests(): void {
-  cfg = { ...DEFAULTS };
-  globalInUse = 0;
-  perAccountInUse.clear();
+  cfg = cloneConfig(DEFAULTS);
+  for (const plane of Object.values(planes)) {
+    plane.globalInUse = 0;
+    plane.perAccountInUse.clear();
+  }
   while (waiters.length) {
     settleWaiter(waiters[0]!, capacityResult(waiters[0]!.started));
   }
 }
 
-function accountInUse(accountKey: string): number {
-  return perAccountInUse.get(accountKey) ?? 0;
+function limitsFor(plane: AdmissionPlane): PlaneLimits {
+  return plane === "sdk" ? cfg.sdk : cfg.acp;
 }
 
-function canAcquire(accountKey: string): boolean {
-  if (cfg.maxConcurrentRuns <= 0) return false;
-  if (globalInUse >= cfg.maxConcurrentRuns) return false;
-  if (accountInUse(accountKey) >= cfg.maxConcurrentRunsPerAccount) return false;
+function accountInUse(plane: AdmissionPlane, accountKey: string): number {
+  return planes[plane].perAccountInUse.get(accountKey) ?? 0;
+}
+
+function canAcquire(plane: AdmissionPlane, accountKey: string): boolean {
+  const limits = limitsFor(plane);
+  const state = planes[plane];
+  if (limits.maxConcurrentRuns <= 0) return false;
+  if (state.globalInUse >= limits.maxConcurrentRuns) return false;
+  if (accountInUse(plane, accountKey) >= limits.maxConcurrentRunsPerAccount) {
+    return false;
+  }
   return true;
 }
 
-function acquire(accountKey: string): () => void {
-  globalInUse++;
-  perAccountInUse.set(accountKey, accountInUse(accountKey) + 1);
+function acquire(plane: AdmissionPlane, accountKey: string): () => void {
+  const state = planes[plane];
+  state.globalInUse++;
+  state.perAccountInUse.set(accountKey, accountInUse(plane, accountKey) + 1);
   let released = false;
   return () => {
     if (released) return;
     released = true;
-    globalInUse = Math.max(0, globalInUse - 1);
-    const n = accountInUse(accountKey) - 1;
-    if (n <= 0) perAccountInUse.delete(accountKey);
-    else perAccountInUse.set(accountKey, n);
+    state.globalInUse = Math.max(0, state.globalInUse - 1);
+    const n = accountInUse(plane, accountKey) - 1;
+    if (n <= 0) state.perAccountInUse.delete(accountKey);
+    else state.perAccountInUse.set(accountKey, n);
     wakeWaiters();
   };
 }
@@ -144,8 +235,8 @@ function wakeWaiters(): void {
       settleWaiter(w, abortedResult(w.started));
       continue;
     }
-    if (canAcquire(w.accountKey)) {
-      const release = acquire(w.accountKey);
+    if (canAcquire(w.plane, w.accountKey)) {
+      const release = acquire(w.plane, w.accountKey);
       settleWaiter(w, {
         ok: true,
         release,
@@ -157,24 +248,35 @@ function wakeWaiters(): void {
   }
 }
 
+function waitingCount(plane?: AdmissionPlane): number {
+  if (!plane) return waiters.length;
+  return waiters.filter((w) => w.plane === plane).length;
+}
+
 /**
- * Acquire a run permit for accountKey, waiting up to waitMs.
+ * Acquire a run permit for accountKey on the given plane, waiting up to waitMs.
  * Always call release() exactly once when ok.
  */
 export async function admitAgentRun(
   accountKey: string,
-  opts?: { signal?: AbortSignal; waitMs?: number },
+  opts?: {
+    signal?: AbortSignal;
+    waitMs?: number;
+    /** Default `acp` (heavy CLI/ACP children). Use `sdk` for in-process engine. */
+    plane?: AdmissionPlane;
+  },
 ): Promise<AdmitResult> {
+  const plane = opts?.plane ?? "acp";
   const key = accountKey || "default";
-  const budget = opts?.waitMs || cfg.waitMs;
+  const budget = opts?.waitMs ?? cfg.waitMs;
   const started = Date.now();
 
   if (opts?.signal?.aborted) {
     return abortedResult(started);
   }
 
-  if (canAcquire(key)) {
-    const release = acquire(key);
+  if (canAcquire(plane, key)) {
+    const release = acquire(plane, key);
     return { ok: true, release, waitMs: 0 };
   }
 
@@ -185,6 +287,7 @@ export async function admitAgentRun(
   const deadline = started + budget;
   return new Promise<AdmitResult>((resolve) => {
     const waiter: Waiter = {
+      plane,
       accountKey: key,
       started,
       deadline,
@@ -207,16 +310,39 @@ export async function admitAgentRun(
   });
 }
 
-/** Snapshot for tests / status. */
+function planeSnapshot(plane: AdmissionPlane) {
+  const state = planes[plane];
+  return {
+    globalInUse: state.globalInUse,
+    perAccount: Object.fromEntries(state.perAccountInUse),
+    waiting: waitingCount(plane),
+  };
+}
+
+/** Snapshot for tests / status. Top-level fields mirror the ACP plane (back-compat). */
 export function getAdmissionSnapshot(): {
   globalInUse: number;
   perAccount: Record<string, number>;
   waiting: number;
+  acp: {
+    globalInUse: number;
+    perAccount: Record<string, number>;
+    waiting: number;
+  };
+  sdk: {
+    globalInUse: number;
+    perAccount: Record<string, number>;
+    waiting: number;
+  };
 } {
+  const acp = planeSnapshot("acp");
+  const sdk = planeSnapshot("sdk");
   return {
-    globalInUse,
-    perAccount: Object.fromEntries(perAccountInUse),
-    waiting: waiters.length,
+    globalInUse: acp.globalInUse,
+    perAccount: acp.perAccount,
+    waiting: acp.waiting,
+    acp,
+    sdk,
   };
 }
 

@@ -242,8 +242,9 @@ export class AcpProcess {
   async runStream(
     opts: AcpProcessPromptOptions,
     onChunk: (text: string) => void,
+    onThought?: (text: string) => void,
   ): Promise<AcpStreamResult> {
-    return this.runPrompt(opts, { onText: onChunk });
+    return this.runPrompt(opts, { onText: onChunk, onThought });
   }
 
   private async runPrompt(

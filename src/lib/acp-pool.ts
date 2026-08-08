@@ -225,12 +225,17 @@ export class AcpWarmPool {
   async runStream(
     args: AcpPoolPromptArgs,
     onChunk: (text: string) => void,
+    onThought?: (text: string) => void,
   ): Promise<AcpStreamResult> {
     await this.start();
     const entry = this.tryAcquire(args.configDir);
     if (entry) {
       try {
-        return await entry.process.runStream(this.toPromptOpts(args), onChunk);
+        return await entry.process.runStream(
+          this.toPromptOpts(args),
+          onChunk,
+          onThought,
+        );
       } finally {
         entry.process.release();
         if (!entry.process.isAlive) {
@@ -243,7 +248,7 @@ export class AcpWarmPool {
       throw new AcpWorkerBusyError(args.configDir);
     }
 
-    return this.runTempStream(args, onChunk);
+    return this.runTempStream(args, onChunk, onThought);
   }
 
   private async runTempSync(args: AcpPoolPromptArgs): Promise<AcpSyncResult> {
@@ -286,6 +291,7 @@ export class AcpWarmPool {
   private async runTempStream(
     args: AcpPoolPromptArgs,
     onChunk: (text: string) => void,
+    onThought?: (text: string) => void,
   ): Promise<AcpStreamResult> {
     console.log(
       `[acp-pool] all warm workers busy — spawning temporary ACP for ${
@@ -316,7 +322,7 @@ export class AcpWarmPool {
       if (!proc.tryAcquire()) {
         return { code: 1, stderr: "temp ACP acquire failed" };
       }
-      return await proc.runStream(this.toPromptOpts(args), onChunk);
+      return await proc.runStream(this.toPromptOpts(args), onChunk, onThought);
     } finally {
       proc.release();
       proc.kill();

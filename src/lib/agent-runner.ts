@@ -27,9 +27,11 @@ async function withAdmission<T>(
   signal: AbortSignal | undefined,
   run: () => Promise<T>,
 ): Promise<T> {
+  const engine = resolveAccountEngine(configDir, config.defaultEngine);
   const admit = await admitAgentRun(accountKeyFor(configDir), {
     signal,
     waitMs: config.admissionWaitMs,
+    plane: engine,
   });
   if (!admit.ok) {
     if (admit.reason === "aborted") {

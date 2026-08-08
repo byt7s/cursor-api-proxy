@@ -24,6 +24,8 @@ describe("parseArgs", () => {
     watch: false,
     watchIntervalMs: 2000,
     mode: undefined as undefined,
+    setKey: false,
+    apiKey: "",
   };
 
   it("parses empty argv", () => {
@@ -188,6 +190,21 @@ describe("parseArgs", () => {
       logout: false,
       accountsList: false,
       accountName: "",
+      proxies: [],
+    });
+  });
+
+  it("parses set-key with account and key positionals", () => {
+    expect(parseArgs(["set-key", "acc8", "crsr_abc123"])).toEqual({
+      ...base,
+      tailscale: false,
+      help: false,
+      login: false,
+      logout: false,
+      accountsList: false,
+      setKey: true,
+      accountName: "acc8",
+      apiKey: "crsr_abc123",
       proxies: [],
     });
   });

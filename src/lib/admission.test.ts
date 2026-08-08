@@ -121,11 +121,43 @@ describe("admitAgentRun", () => {
     const second = await secondPending;
     expect(second.ok).toBe(true);
     if (second.ok) second.release();
-    expect(getAdmissionSnapshot()).toEqual({
+    expect(getAdmissionSnapshot()).toMatchObject({
       globalInUse: 0,
       perAccount: {},
       waiting: 0,
+      acp: { globalInUse: 0, perAccount: {}, waiting: 0 },
+      sdk: { globalInUse: 0, perAccount: {}, waiting: 0 },
     });
+  });
+
+  it("uses a separate higher-capacity plane for sdk", async () => {
+    configureAdmission({
+      maxConcurrentRuns: 1,
+      maxConcurrentRunsPerAccount: 1,
+      sdkMaxConcurrentRuns: 3,
+      sdkMaxConcurrentRunsPerAccount: 3,
+      waitMs: 0,
+    });
+    const acp = await admitAgentRun("a", { plane: "acp", waitMs: 0 });
+    expect(acp.ok).toBe(true);
+    const acpBlocked = await admitAgentRun("b", { plane: "acp", waitMs: 0 });
+    expect(acpBlocked.ok).toBe(false);
+
+    const sdkRuns = await Promise.all([
+      admitAgentRun("a", { plane: "sdk", waitMs: 0 }),
+      admitAgentRun("a", { plane: "sdk", waitMs: 0 }),
+      admitAgentRun("a", { plane: "sdk", waitMs: 0 }),
+    ]);
+    expect(sdkRuns.every((r) => r.ok)).toBe(true);
+    const sdkBlocked = await admitAgentRun("a", { plane: "sdk", waitMs: 0 });
+    expect(sdkBlocked.ok).toBe(false);
+
+    const snap = getAdmissionSnapshot();
+    expect(snap.acp.globalInUse).toBe(1);
+    expect(snap.sdk.globalInUse).toBe(3);
+
+    if (acp.ok) acp.release();
+    for (const r of sdkRuns) if (r.ok) r.release();
   });
 
   it("distinguishes cancellation while waiting from capacity denial", async () => {
