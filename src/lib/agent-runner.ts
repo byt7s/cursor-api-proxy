@@ -81,6 +81,8 @@ export type AgentRunResult = {
   reasoning?: string;
   /** Stable failure token for quarantine / failover classifiers. */
   failureText?: string;
+  /** SDK agent id for sticky `Agent.resume` on follow-ups. */
+  agentId?: string;
 };
 
 function acpArgsWithModel(acpArgs: string[], model: string): string[] {
@@ -145,6 +147,7 @@ function trySdkRun(
   signal: AbortSignal | undefined,
   onChunk?: (text: string) => void,
   onThought?: (text: string) => void,
+  resumeAgentId?: string,
 ): Promise<AgentRunResult> | null {
   if (resolveAccountEngine(configDir, config.defaultEngine) !== "sdk") {
     return null;
@@ -175,6 +178,7 @@ function trySdkRun(
     signal,
     onChunk,
     onThought,
+    resumeAgentId,
   });
 }
 
@@ -187,6 +191,7 @@ export function runAgentSync(
   stdinPrompt?: string,
   configDir?: string,
   signal?: AbortSignal,
+  resumeAgentId?: string,
 ): Promise<AgentRunResult> {
   return withAdmission(config, configDir, signal, () =>
     runAgentSyncUnlocked(
@@ -198,6 +203,7 @@ export function runAgentSync(
       stdinPrompt,
       configDir,
       signal,
+      resumeAgentId,
     ),
   );
 }
@@ -211,6 +217,7 @@ function runAgentSyncUnlocked(
   stdinPrompt?: string,
   configDir?: string,
   signal?: AbortSignal,
+  resumeAgentId?: string,
 ): Promise<AgentRunResult> {
   const sdkRun = trySdkRun(
     config,
@@ -219,6 +226,9 @@ function runAgentSyncUnlocked(
     stdinPrompt,
     configDir,
     signal,
+    undefined,
+    undefined,
+    resumeAgentId,
   );
   if (sdkRun) {
     return sdkRun.finally(() => cleanupTemp(tempDir));
@@ -315,7 +325,8 @@ export function runAgentStream(
   configDir?: string,
   signal?: AbortSignal,
   onThought?: StreamLineHandler,
-): Promise<{ code: number; stderr: string }> {
+  resumeAgentId?: string,
+): Promise<{ code: number; stderr: string; agentId?: string }> {
   return withAdmission(config, configDir, signal, () =>
     runAgentStreamUnlocked(
       config,
@@ -328,6 +339,7 @@ export function runAgentStream(
       configDir,
       signal,
       onThought,
+      resumeAgentId,
     ),
   );
 }
@@ -343,7 +355,8 @@ function runAgentStreamUnlocked(
   configDir?: string,
   signal?: AbortSignal,
   onThought?: StreamLineHandler,
-): Promise<{ code: number; stderr: string }> {
+  resumeAgentId?: string,
+): Promise<{ code: number; stderr: string; agentId?: string }> {
   const sdkRun = trySdkRun(
     config,
     workspaceDir,
@@ -353,10 +366,15 @@ function runAgentStreamUnlocked(
     signal,
     onLine,
     onThought,
+    resumeAgentId,
   );
   if (sdkRun) {
     return sdkRun
-      .then((result) => ({ code: result.code, stderr: result.stderr }))
+      .then((result) => ({
+        code: result.code,
+        stderr: result.stderr,
+        agentId: result.agentId,
+      }))
       .finally(() => cleanupTemp(tempDir));
   }
 

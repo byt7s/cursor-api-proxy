@@ -85,6 +85,17 @@ describe("AccountPool Active Requests & Rate Limits", () => {
       ).toBe("/dir2");
     });
 
+    it("prefers a sticky account when still usable", () => {
+      const pool = new AccountPool(["/dir1", "/dir2", "/dir3"]);
+      expect(pool.getNextConfigDir({ prefer: "/dir3" })).toBe("/dir3");
+      expect(
+        pool.getNextConfigDir({
+          prefer: "/dir2",
+          exclude: new Set(["/dir2"]),
+        }),
+      ).toBe("/dir1");
+    });
+
     it("should skip excluded accounts when selecting next", () => {
       const pool = new AccountPool(["/dir1", "/dir2", "/dir3"]);
       expect(
