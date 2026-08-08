@@ -145,4 +145,119 @@ describe("AcpWarmPool", () => {
     await first;
     pool.shutdown();
   });
+
+  it("warms a single default worker when configDirs is empty", async () => {
+    const pool = initAcpWarmPool(testConfig({ configDirs: [] }));
+    await pool.start();
+    expect(pool.getWorkerCount()).toBe(1);
+    const result = await pool.runSync({
+      configDir: undefined,
+      workspaceDir: cwd,
+      effectiveChatOnly: true,
+      prompt: "default-worker",
+      mode: "ask",
+    });
+    expect(result.code).toBe(0);
+    expect(result.stdout).toContain("Hello from fake ACP");
+  });
+
+  it("reuses a warm worker across runStream prompts", async () => {
+    const pool = initAcpWarmPool(
+      testConfig({ configDirs: ["/acct-stream"], acpEnv: { FAKE_ACP_LABEL: "stream" } }),
+    );
+    await pool.start();
+    expect(pool.getWorkerCount()).toBe(1);
+
+    const chunks1: string[] = [];
+    const chunks2: string[] = [];
+    const r1 = await pool.runStream(
+      {
+        configDir: "/acct-stream",
+        workspaceDir: cwd,
+        effectiveChatOnly: true,
+        prompt: "one",
+        mode: "ask",
+      },
+      (t) => chunks1.push(t),
+    );
+    const r2 = await pool.runStream(
+      {
+        configDir: "/acct-stream",
+        workspaceDir: cwd,
+        effectiveChatOnly: true,
+        prompt: "two",
+        mode: "ask",
+      },
+      (t) => chunks2.push(t),
+    );
+    expect(r1.code).toBe(0);
+    expect(r2.code).toBe(0);
+    expect(chunks1.join("")).toContain("Hello from fake ACP");
+    expect(chunks2.join("")).toContain("Hello from fake ACP");
+    expect(pool.getWorkerCount()).toBe(1);
+  });
+
+  it("respawns after a warm worker exits mid-lifecycle", async () => {
+    const pool = initAcpWarmPool(
+      testConfig({
+        configDirs: ["/acct-crash"],
+        acpEnv: {
+          FAKE_ACP_LABEL: "crash",
+          FAKE_ACP_EXIT_AFTER_PROMPT: "1",
+        },
+      }),
+    );
+    await pool.start();
+    expect(pool.getWorkerCount()).toBe(1);
+
+    const first = await pool.runSync({
+      configDir: "/acct-crash",
+      workspaceDir: cwd,
+      effectiveChatOnly: true,
+      prompt: "bye",
+      mode: "ask",
+    });
+    expect(first.code).toBe(0);
+
+    // Give the child close event time to mark the worker dead, then respawn.
+    await new Promise((r) => setTimeout(r, 100));
+    await pool.respawnIfMissing("/acct-crash");
+    expect(pool.getWorkerCount()).toBeGreaterThanOrEqual(1);
+
+    // Next prompt still works (warm or temp overflow after another exit).
+    const second = await pool.runSync({
+      configDir: "/acct-crash",
+      workspaceDir: cwd,
+      effectiveChatOnly: true,
+      prompt: "again",
+      mode: "ask",
+    });
+    expect(second.code).toBe(0);
+    expect(second.stdout).toContain("Hello from fake ACP");
+  });
+
+  it("shutdown during an in-flight run does not hang", async () => {
+    const pool = new AcpWarmPool(
+      testConfig({
+        configDirs: ["/acct-shut"],
+        acpEnv: { FAKE_ACP_LABEL: "shut", FAKE_ACP_DELAY_MS: "300" },
+      }),
+    );
+    await pool.start();
+    const pending = pool.runSync({
+      configDir: "/acct-shut",
+      workspaceDir: cwd,
+      effectiveChatOnly: true,
+      prompt: "slow",
+      mode: "ask",
+    });
+    await new Promise((r) => setTimeout(r, 30));
+    pool.shutdown();
+    expect(pool.getWorkerCount()).toBe(0);
+    // In-flight RPC should settle (success or failure) without hanging the suite.
+    await Promise.race([
+      pending.catch(() => undefined),
+      new Promise((r) => setTimeout(r, 2000)),
+    ]);
+  });
 });

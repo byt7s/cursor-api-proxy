@@ -7,6 +7,7 @@
  * - FAKE_ACP_SCENARIO: unset | empty_models | dup_names | fail_set_config | with_thought
  * - FAKE_ACP_DELAY_MS: delay before answering session/prompt (holds the worker busy)
  * - FAKE_ACP_LABEL: optional label echoed in the agent message for identity checks
+ * - FAKE_ACP_EXIT_AFTER_PROMPT: when "1", exit after completing one session/prompt
  *
  * Emits to stderr for assertions: __FAKE_ACP_SET_CONFIG__:<json>\n
  */
@@ -15,6 +16,7 @@ import { createInterface } from "node:readline";
 const scenario = process.env.FAKE_ACP_SCENARIO || "";
 const delayMs = Number(process.env.FAKE_ACP_DELAY_MS || "0");
 const label = process.env.FAKE_ACP_LABEL || "fake";
+const exitAfterPrompt = process.env.FAKE_ACP_EXIT_AFTER_PROMPT === "1";
 let sessionCounter = 0;
 
 function sessionNewResult() {
@@ -110,6 +112,9 @@ rl.on("line", (line) => {
         process.stdout.write(
           JSON.stringify({ jsonrpc: "2.0", id: msg.id, result }) + "\n",
         );
+        if (exitAfterPrompt && msg.method === "session/prompt") {
+          process.exit(0);
+        }
       }
     } catch {
       /* ignore */
