@@ -27,6 +27,7 @@ With the proxy **running**, open:
 |-----|---------|
 | `http://127.0.0.1:8765/` | **Dashboard** — status, effective config, request stats from `sessions.log`, log tail, action buttons |
 | `http://127.0.0.1:8765/wiki` | **Wiki** — this document rendered from `docs/WIKI.md` |
+| `http://127.0.0.1:8765/accounts` | JSON list of saved Cursor accounts (auth method, email, plan/usage when available) |
 | `http://127.0.0.1:8765/healthz` | Plain **`ok`** (for scripts and load checks) |
 | `http://127.0.0.1:8765/health` | JSON health payload (version, workspace, default model, …) |
 
@@ -121,16 +122,22 @@ The plist label is **`com.cursor-api-proxy`**. Use **`cursor-api-proxy disable`*
 
 ## HTTP routes
 
-**LLM / health**
+**LLM / health / accounts**
 
 - `GET /health`, `GET /healthz`, `GET /v1/models`
-- `POST /v1/chat/completions`, `POST /v1/messages`
+- `GET /accounts` — JSON account pool listing (same data as `cursor-api-proxy accounts`)
+- `POST /v1/chat/completions`, `POST /v1/responses`, `POST /v1/messages`
 
 **Dashboard (no API key)**
 
 - `GET /`, `GET /wiki`, `GET /static/*`
 - `GET /api/status`, `GET /api/config`, `GET /api/log`, `GET /api/stats`, `GET /api/wiki`
 - `POST /api/control` with body `{ "action": "start" | "stop" | "restart" | "enable" | "disable" }` — spawns the **`~/.local/bin/cursor-api-proxy`** script in the background (same pattern as the bridge).
+
+**`GET /accounts` notes**
+
+- Returns `{ "accounts": [ … ] }` with fields such as `name`, `authMethod`, `email`, `plan`, `usage`, `usageError`.
+- Agent API keys (`crsr_…`) can enrich email / key metadata via Cursor `GET /v1/me`, but **plan and usage stay `null`** (`usageError: "api_key_unsupported"`) — billing endpoints need a session JWT from CLI/browser login.
 
 ---
 

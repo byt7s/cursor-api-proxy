@@ -207,7 +207,9 @@ export function printHelp(version: string): void {
     "  login [name] --proxy=...  CLI login via a random proxy from a comma-separated list",
   );
   console.log("  logout <name>             Remove a saved Cursor account");
-  console.log("  accounts                  List saved accounts with plan info");
+  console.log(
+    "  accounts                  List saved accounts (also GET /accounts on the server)",
+  );
   console.log(
     "  reset-hwid                Reset Cursor machine/telemetry IDs (anti-ban)",
   );

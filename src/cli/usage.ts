@@ -32,7 +32,83 @@ export function tokenSub(token: string): string | undefined {
 // Cursor API
 // ---------------------------------------------------------------------------
 
-const API_BASE = "https://api2.cursor.sh";
+export type ModelUsage = {
+  numRequests: number;
+  numRequestsTotal: number;
+  numTokens: number;
+  maxTokenUsage: number | null;
+  maxRequestUsage: number | null;
+};
+
+export type UsageData = {
+  startOfMonth: string;
+  models: Record<string, ModelUsage>;
+};
+
+/** Session JWTs work with /auth/usage; `crsr_…` agent API keys do not. */
+export function isSessionAccessToken(token: string): boolean {
+  if (!token || token.startsWith("crsr_")) return false;
+  const parts = token.split(".");
+  return parts.length === 3 && parts[0].length > 0 && parts[1].length > 0;
+}
+
+/** Cursor auth-error JSON must not be treated as usage/model data. */
+export function isCursorAuthErrorPayload(
+  raw: Record<string, unknown> | null | undefined,
+): boolean {
+  if (!raw || typeof raw !== "object") return false;
+  const code = typeof raw.code === "string" ? raw.code : "";
+  if (/unauth|not_logged|forbidden|unauthorized/i.test(code)) return true;
+  const msg = typeof raw.message === "string" ? raw.message : "";
+  if (/unauthenticated|not_logged_in|ERROR_NOT_LOGGED_IN/i.test(msg)) return true;
+  return false;
+}
+
+/**
+ * Parse /auth/usage JSON. Returns null for auth errors or malformed payloads
+ * so callers never put `code`/`details` into the models map.
+ */
+export function parseUsageApiResponse(raw: unknown): UsageData | null {
+  if (!raw || typeof raw !== "object") return null;
+  const obj = raw as Record<string, unknown>;
+  if (isCursorAuthErrorPayload(obj)) return null;
+
+  const models: Record<string, ModelUsage> = {};
+  for (const [key, value] of Object.entries(obj)) {
+    if (
+      key === "startOfMonth" ||
+      key === "code" ||
+      key === "message" ||
+      key === "details" ||
+      key === "error"
+    ) {
+      continue;
+    }
+    if (!value || typeof value !== "object") continue;
+    const row = value as Record<string, unknown>;
+    if (!("numRequests" in row)) continue;
+    models[key] = {
+      numRequests: Number(row.numRequests) || 0,
+      numRequestsTotal: Number(row.numRequestsTotal) || 0,
+      numTokens: Number(row.numTokens) || 0,
+      maxTokenUsage:
+        typeof row.maxTokenUsage === "number" ? row.maxTokenUsage : null,
+      maxRequestUsage:
+        typeof row.maxRequestUsage === "number" ? row.maxRequestUsage : null,
+    };
+  }
+
+  // A bare auth-shaped object with no model rows is not usage data.
+  if (Object.keys(models).length === 0 && !("startOfMonth" in obj)) {
+    return null;
+  }
+
+  return {
+    startOfMonth:
+      typeof obj.startOfMonth === "string" ? obj.startOfMonth : "",
+    models,
+  };
+}
 
 function apiGet(path: string, token: string): Promise<unknown> {
   return new Promise((resolve, reject) => {
@@ -61,33 +137,71 @@ function apiGet(path: string, token: string): Promise<unknown> {
   });
 }
 
-export type ModelUsage = {
-  numRequests: number;
-  numRequestsTotal: number;
-  numTokens: number;
-  maxTokenUsage: number | null;
-  maxRequestUsage: number | null;
+export type ApiKeyProfile = {
+  apiKeyName: string;
+  createdAt: string;
+  userEmail: string;
 };
 
-export type UsageData = {
-  startOfMonth: string;
-  models: Record<string, ModelUsage>;
-};
+/** Parse `GET https://api.cursor.com/v1/me` (Basic auth with agent API key). */
+export function parseApiKeyProfileResponse(raw: unknown): ApiKeyProfile | null {
+  if (!raw || typeof raw !== "object") return null;
+  const obj = raw as Record<string, unknown>;
+  const apiKeyName =
+    typeof obj.apiKeyName === "string" ? obj.apiKeyName.trim() : "";
+  const createdAt =
+    typeof obj.createdAt === "string" ? obj.createdAt.trim() : "";
+  const userEmail =
+    typeof obj.userEmail === "string" ? obj.userEmail.trim() : "";
+  if (!apiKeyName && !userEmail) return null;
+  return { apiKeyName, createdAt, userEmail };
+}
+
+/**
+ * Identity metadata available to agent API keys (`crsr_…`).
+ * Does **not** include plan, expiry, or usage — those need a session JWT.
+ */
+export async function fetchApiKeyProfile(
+  apiKey: string,
+): Promise<ApiKeyProfile | null> {
+  if (!apiKey || !apiKey.startsWith("crsr_")) return null;
+  const auth = Buffer.from(`${apiKey}:`, "utf8").toString("base64");
+  return new Promise((resolve) => {
+    const req = https.request(
+      {
+        hostname: "api.cursor.com",
+        path: "/v1/me",
+        method: "GET",
+        headers: { Authorization: `Basic ${auth}` },
+      },
+      (res) => {
+        let data = "";
+        res.on("data", (c) => (data += c));
+        res.on("end", () => {
+          try {
+            resolve(parseApiKeyProfileResponse(JSON.parse(data)));
+          } catch {
+            resolve(null);
+          }
+        });
+      },
+    );
+    req.on("error", () => resolve(null));
+    req.setTimeout(8000, () => {
+      req.destroy();
+      resolve(null);
+    });
+    req.end();
+  });
+}
 
 export async function fetchAccountUsage(
   token: string,
 ): Promise<UsageData | null> {
+  if (!isSessionAccessToken(token)) return null;
   try {
-    const raw = (await apiGet("/auth/usage", token)) as Record<
-      string,
-      unknown
-    > | null;
-    if (!raw || typeof raw !== "object") return null;
-    const { startOfMonth, ...rest } = raw as Record<string, unknown>;
-    return {
-      startOfMonth: typeof startOfMonth === "string" ? startOfMonth : "",
-      models: rest as Record<string, ModelUsage>,
-    };
+    const raw = await apiGet("/auth/usage", token);
+    return parseUsageApiResponse(raw);
   } catch {
     return null;
   }
@@ -116,23 +230,30 @@ export function describePlan(profile: StripeProfile): string {
     case "free":
     case "hobby":
       return "Hobby (free) — limited agent requests";
-    default:
-      return `${membershipType} · ${subscriptionStatus}`;
+    default: {
+      const parts = [membershipType, subscriptionStatus].filter(Boolean);
+      return parts.length > 0 ? parts.join(" · ") : "Unknown plan";
+    }
   }
 }
 
 export async function fetchStripeProfile(
   token: string,
 ): Promise<StripeProfile | null> {
+  if (!isSessionAccessToken(token)) return null;
   try {
     const raw = (await apiGet("/auth/full_stripe_profile", token)) as Record<
       string,
       unknown
     > | null;
     if (!raw || typeof raw !== "object") return null;
+    if (isCursorAuthErrorPayload(raw)) return null;
+    const membershipType = String(raw.membershipType ?? "");
+    const subscriptionStatus = String(raw.subscriptionStatus ?? "");
+    if (!membershipType && !subscriptionStatus) return null;
     return {
-      membershipType: String(raw.membershipType ?? ""),
-      subscriptionStatus: String(raw.subscriptionStatus ?? ""),
+      membershipType,
+      subscriptionStatus,
       daysRemainingOnTrial:
         typeof raw.daysRemainingOnTrial === "number"
           ? raw.daysRemainingOnTrial

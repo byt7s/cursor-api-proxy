@@ -9,6 +9,7 @@ import { handleModels } from "./handlers/models.js";
 import { handleChatCompletions } from "./handlers/chat-completions.js";
 import { handleResponses } from "./handlers/responses.js";
 import { handleAnthropicMessages } from "./handlers/anthropic-messages.js";
+import { handleAccounts } from "./handlers/accounts.js";
 import {
   adminDashboardMatches,
   handleAdminDashboard,
@@ -84,6 +85,11 @@ export function createRequestListener(opts: BridgeServerOptions) {
 
       if (req.method === "GET" && pathname === "/health") {
         handleHealth(res, { version: opts.version, config });
+        return;
+      }
+
+      if (req.method === "GET" && pathname === "/accounts") {
+        handleAccounts(res);
         return;
       }
 
