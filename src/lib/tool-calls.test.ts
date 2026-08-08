@@ -5,6 +5,7 @@ import {
   containsToolCallCandidate,
   normalizeToolDefinitions,
   parseToolCallOutput,
+  resolveAnthropicAssistantOutput,
   resolveAssistantOutput,
   shouldUseToolBridge,
 } from "./tool-calls.js";
@@ -423,5 +424,46 @@ describe("OpenAI shaping", () => {
         usage,
       },
     ]);
+  });
+});
+
+describe("Anthropic tool bridge helpers", () => {
+  it("normalizes Anthropic tool schemas", () => {
+    expect(
+      normalizeToolDefinitions([
+        {
+          name: "lookup",
+          description: "Lookup",
+          input_schema: { type: "object", properties: { q: { type: "string" } } },
+        },
+      ]),
+    ).toEqual([
+      {
+        name: "lookup",
+        description: "Lookup",
+        parameters: { type: "object", properties: { q: { type: "string" } } },
+      },
+    ]);
+  });
+
+  it("shapes tool_use content blocks", () => {
+    const out = resolveAnthropicAssistantOutput(
+      '{"name":"lookup","arguments":{"q":"hi"}}',
+      [
+        {
+          name: "lookup",
+          input_schema: { type: "object", properties: { q: { type: "string" } } },
+        },
+      ],
+    );
+    expect(out.kind).toBe("tool_use");
+    if (out.kind !== "tool_use") return;
+    expect(out.stop_reason).toBe("tool_use");
+    expect(out.content[0]).toMatchObject({
+      type: "tool_use",
+      name: "lookup",
+      input: { q: "hi" },
+    });
+    expect(out.content[0]!.id.startsWith("toolu_")).toBe(true);
   });
 });
