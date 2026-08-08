@@ -26,7 +26,7 @@ describe("loadEnvConfig", () => {
     expect(loaded.commandShell).toBe("cmd.exe");
     expect(loaded.maxMode).toBe(false);
     expect(loaded.promptViaStdin).toBe(false);
-    expect(loaded.useAcp).toBe(false);
+    expect(loaded.useAcp).toBe(true);
     expect(loaded.contextPreamble).toBe(true);
   });
 

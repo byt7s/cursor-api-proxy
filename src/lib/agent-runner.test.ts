@@ -3,6 +3,7 @@ import { describe, it, expect, vi, beforeEach } from "vitest";
 import type { BridgeConfig } from "./config.js";
 import { runAgentSync, runAgentStream } from "./agent-runner.js";
 import { runAcpStream, runAcpSync } from "./acp-client.js";
+import { shutdownAcpWarmPool } from "./acp-pool.js";
 
 vi.mock("./acp-client.js", () => ({
   runAcpSync: vi.fn().mockResolvedValue({ code: 0, stdout: "ok", stderr: "" }),
@@ -54,6 +55,7 @@ function config(overrides: Partial<BridgeConfig> = {}): BridgeConfig {
 
 describe("ACP requestTimeoutMs", () => {
   beforeEach(() => {
+    shutdownAcpWarmPool();
     vi.mocked(runAcpSync).mockClear();
     vi.mocked(runAcpStream).mockClear();
   });
