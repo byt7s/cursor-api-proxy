@@ -324,4 +324,84 @@ describe("admin dashboard HTTP APIs", () => {
     expect(ok.status).toBe(200);
     expect(runResetHwid).toHaveBeenCalledWith({ deepClean: true });
   });
+
+  it("GET /api/accounts requires bearer and never echoes api keys", async () => {
+    writeApiKeyAccount(
+      path.join(accountsDir, "listed"),
+      "listed",
+      "crsr_secret_listed_key",
+    );
+    const server = await start(createTestConfig({ requiredKey: "bridge-secret" }));
+    const denied = await fetchServer(server, "/api/accounts");
+    expect(denied.status).toBe(401);
+
+    const ok = await fetchServer(server, "/api/accounts", {
+      headers: { authorization: "Bearer bridge-secret" },
+    });
+    expect(ok.status).toBe(200);
+    const body = ok.json as {
+      accounts: Array<{
+        name: string;
+        hasApiKey: boolean;
+        configDir: string;
+      }>;
+    };
+    expect(Array.isArray(body.accounts)).toBe(true);
+    const listed = body.accounts.find((a) => a.name === "listed");
+    expect(listed).toMatchObject({ name: "listed", hasApiKey: true });
+    expect(JSON.stringify(ok.json)).not.toContain("crsr_secret_listed_key");
+  });
+
+  it("GET /api/requests requires bearer and returns recent request shape", async () => {
+    const logPath = path.join(os.tmpdir(), `cap-admin-req-${Date.now()}.log`);
+    fs.writeFileSync(
+      logPath,
+      `${new Date().toISOString()} POST /v1/chat/completions 127.0.0.1 200\n`,
+      "utf8",
+    );
+    const server = await start(
+      createTestConfig({
+        requiredKey: "bridge-secret",
+        sessionsLogPath: logPath,
+      }),
+    );
+    const denied = await fetchServer(server, "/api/requests?limit=10");
+    expect(denied.status).toBe(401);
+
+    const ok = await fetchServer(server, "/api/requests?limit=10", {
+      headers: { authorization: "Bearer bridge-secret" },
+    });
+    expect(ok.status).toBe(200);
+    const body = ok.json as {
+      path: string;
+      requests: Array<{
+        method: string;
+        pathname: string;
+        status: number;
+        ts: string;
+      }>;
+    };
+    expect(body.path).toBe(logPath);
+    expect(body.requests.length).toBeGreaterThanOrEqual(1);
+    expect(body.requests[0]).toMatchObject({
+      method: "POST",
+      pathname: "/v1/chat/completions",
+      status: 200,
+    });
+    fs.rmSync(logPath, { force: true });
+  });
+
+  it("allows loopback POST /api/accounts without bearer when requiredKey unset", async () => {
+    const server = await start(createTestConfig({ requiredKey: undefined }));
+    const res = await fetchServer(server, "/api/accounts", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ name: "loop-acc", apiKey: "crsr_loop_key" }),
+    });
+    expect(res.status).toBe(201);
+    expect(JSON.stringify(res.json)).not.toContain("crsr_loop_key");
+    expect(
+      fs.existsSync(path.join(accountsDir, "loop-acc", ".cursor-api-key")),
+    ).toBe(true);
+  });
 });
