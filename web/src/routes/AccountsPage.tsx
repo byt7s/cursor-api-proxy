@@ -17,6 +17,7 @@ import {
   PasswordInput,
   Stack,
   Table,
+  Textarea,
   type TableColumn,
 } from "../design-system";
 import { useApiResource, useAsyncAction, usePolling, useSettings } from "../hooks";
@@ -60,6 +61,8 @@ export function AccountsPage() {
   const [addKey, setAddKey] = useState("");
   const [setKeyName, setSetKeyName] = useState("");
   const [setKeyValue, setSetKeyValue] = useState("");
+  const [modelsName, setModelsName] = useState("");
+  const [modelsText, setModelsText] = useState("");
   const [formError, setFormError] = useState<string | null>(null);
   const [removing, setRemoving] = useState<string | null>(null);
 
@@ -104,6 +107,43 @@ export function AccountsPage() {
     if (result) setSetKeyValue("");
   }
 
+  async function onLoadModels(): Promise<void> {
+    if (!modelsName.trim()) {
+      setFormError("Account name is required");
+      return;
+    }
+    setFormError(null);
+    const result = await run(() => api.accountModels(modelsName.trim()), {
+      errorPrefix: "Load models failed",
+    });
+    if (result) {
+      setModelsText((result.allowedModels ?? []).join("\n"));
+    }
+  }
+
+  async function onSaveModels(event: FormEvent): Promise<void> {
+    event.preventDefault();
+    if (!modelsName.trim()) {
+      setFormError("Account name is required");
+      return;
+    }
+    setFormError(null);
+    const allowedModels = modelsText
+      .split(/\r?\n/)
+      .map((line) => line.trim())
+      .filter((line) => line && !line.startsWith("#"));
+    await run(
+      () => api.setAccountModels(modelsName.trim(), allowedModels),
+      {
+        successMessage: allowedModels.length
+          ? `Allowlist saved for ${modelsName.trim()}`
+          : `Allowlist cleared for ${modelsName.trim()} (all models allowed)`,
+        errorPrefix: "Save models failed",
+        onSuccess: () => accounts.reload(),
+      },
+    );
+  }
+
   async function onRemoveConfirmed(): Promise<void> {
     const name = removing;
     setRemoving(null);
@@ -136,6 +176,18 @@ export function AccountsPage() {
     },
     { key: "apiKeyName", header: "API key", render: (a) => formatDash(a.apiKeyName) },
     { key: "usage", header: "Usage", render: usageCell },
+    {
+      key: "models",
+      header: "Models",
+      render: (a) =>
+        a.allowedModels && a.allowedModels.length > 0 ? (
+          <span title={a.allowedModels.join(", ")}>
+            {a.allowedModels.length} allowed
+          </span>
+        ) : (
+          <Badge tone="neutral">all</Badge>
+        ),
+    },
     {
       key: "dir",
       header: "Dir",
@@ -277,6 +329,50 @@ export function AccountsPage() {
                 <Inline justify="end">
                   <Button type="submit" loading={pending}>
                     Set key
+                  </Button>
+                </Inline>
+              </Stack>
+            </form>
+          </CardBody>
+        </Card>
+
+        <Card>
+          <CardHeader
+            title="Model allowlist"
+            description="One Cursor model id per line in .cursor-bridge-models. Empty = allow all."
+          />
+          <CardBody>
+            <form onSubmit={onSaveModels}>
+              <Stack gap={4}>
+                <FormField label="Account name">
+                  <Input
+                    value={modelsName}
+                    placeholder="work"
+                    onChange={(e) => setModelsName(e.target.value)}
+                  />
+                </FormField>
+                <FormField
+                  label="Allowed models"
+                  help="Leave empty and save to clear the allowlist"
+                >
+                  <Textarea
+                    rows={5}
+                    value={modelsText}
+                    placeholder={"composer-2\nsonnet-4.6"}
+                    onChange={(e) => setModelsText(e.target.value)}
+                  />
+                </FormField>
+                <Inline justify="end" gap={2}>
+                  <Button
+                    type="button"
+                    variant="secondary"
+                    loading={pending}
+                    onClick={() => void onLoadModels()}
+                  >
+                    Load
+                  </Button>
+                  <Button type="submit" loading={pending}>
+                    Save allowlist
                   </Button>
                 </Inline>
               </Stack>

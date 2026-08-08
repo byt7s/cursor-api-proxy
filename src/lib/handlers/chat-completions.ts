@@ -12,10 +12,8 @@ import {
 import { runAgentStream, runAgentSync } from "../agent-runner.js";
 import { createStreamParser } from "../cli-stream-parser.js";
 import { json, writeSseHeaders } from "../http.js";
-import { resolveModelWithoutCatalog } from "../model-map.js";
 import {
   buildPromptFromMessages,
-  normalizeModelId,
   toolsToSystemText,
   type OpenAiChatCompletionRequest,
 } from "../openai.js";
@@ -27,8 +25,8 @@ import {
   logTrafficResponse,
   type TrafficMessage,
 } from "../request-log.js";
-import { rememberResolvedModel, resolveModel } from "../resolve-model.js";
 import { resolveRequestMode } from "../resolve-mode.js";
+import { resolveRequestModel } from "../resolve-request-model.js";
 import { resolveWorkspace } from "../workspace.js";
 import { buildBridgeContextPreamble, BRIDGE_AGENT_PROMPT_SEPARATOR } from "../bridge-context-preamble.js";
 import { sanitizeMessages } from "../sanitize.js";
@@ -36,6 +34,8 @@ import { getAccountStats } from "../account-pool.js";
 import {
   ALL_ACCOUNTS_DISABLED_MESSAGE,
   ALL_ACCOUNTS_RATE_LIMITED_MESSAGE,
+  MODEL_NOT_ALLOWED_CODE,
+  MODEL_NOT_ALLOWED_MESSAGE,
   runStreamWithAccountFailover,
   runSyncWithAccountFailover,
 } from "../account-failover.js";
@@ -84,6 +84,7 @@ const OUTCOME_ERROR_CODES: Record<string, string> = {
   aborted: "client_aborted",
   all_rate_limited: "all_rate_limited",
   all_disabled: "all_disabled",
+  model_not_allowed: MODEL_NOT_ALLOWED_CODE,
 };
 
 /** Record which account/engine served the request, plus its error code. */
@@ -134,21 +135,14 @@ export async function handleChatCompletions(
   const latency = new LatencyWaterfall();
   const { config, lastRequestedModelRef } = ctx;
   const body = JSON.parse(rawBody || "{}") as OpenAiChatCompletionRequest;
-  const requested = normalizeModelId(body.model);
-  const model = resolveModel(requested, lastRequestedModelRef, config);
   // Skip agent --list-models on the hot path (~2s); GET /v1/models still lists.
-  const decision = resolveModelWithoutCatalog({
-    requested: model,
-    defaultModel: config.defaultModel,
-  });
-  const cursorModel = decision.final;
-  rememberResolvedModel(cursorModel, lastRequestedModelRef);
+  const modelResolution = resolveRequestModel(body.model, lastRequestedModelRef, config);
+  if (!modelResolution.ok) {
+    json(res, modelResolution.status, modelResolution.body);
+    return;
+  }
+  const { cursorModel, displayModel, decision } = modelResolution;
   logModelResolution(config.verbose, decision);
-  // When request is "default", use defaultModel for response display (dashboard) if set; else echo "default"
-  const displayModel =
-    decision.requestedWasDefault && config.defaultModel !== "default"
-      ? config.defaultModel
-      : model;
 
   const cleanMessages = sanitizeMessages(body.messages ?? []);
 
@@ -178,7 +172,7 @@ export async function handleChatCompletions(
   });
   logTrafficRequest(
     config.verbose,
-    model ?? cursorModel,
+    displayModel,
     trafficMessages,
     !!body.stream,
   );
@@ -345,7 +339,7 @@ export async function handleChatCompletions(
       annotateRequest(res, { completionChars: accumulated.length });
       logTrafficResponse(
         config.verbose,
-        model ?? cursorModel,
+        displayModel,
         accumulated,
         true,
       );
@@ -373,7 +367,7 @@ export async function handleChatCompletions(
       annotateRequest(res, { completionChars: accumulated.length });
       logTrafficResponse(
         config.verbose,
-        model ?? cursorModel,
+        displayModel,
         accumulated,
         true,
       );
@@ -429,6 +423,7 @@ export async function handleChatCompletions(
         latency.mark("spawn_start");
         const outcome = await runStreamWithAccountFailover({
           signal: abortController.signal,
+          requiredModel: cursorModel,
           preferConfigDir: affinity?.configDir,
           onAccountFailover,
           onCommit: ensureHeaders,
@@ -566,6 +561,35 @@ export async function handleChatCompletions(
           return;
         }
 
+        if (outcome.status === "model_not_allowed") {
+          latency.mark("shape_done");
+          logLatency(config, latency, { ok: false, model: displayModel });
+          if (!headersWritten) {
+            json(res, 403, {
+              error: {
+                message: MODEL_NOT_ALLOWED_MESSAGE(outcome.model),
+                code: MODEL_NOT_ALLOWED_CODE,
+                model: outcome.model,
+              },
+            });
+          } else {
+            res.write(
+              `data: ${JSON.stringify({
+                error: {
+                  message: MODEL_NOT_ALLOWED_MESSAGE(outcome.model),
+                  code: MODEL_NOT_ALLOWED_CODE,
+                  model: outcome.model,
+                },
+              })}\n\n`,
+            );
+            res.write("data: [DONE]\n\n");
+            res.end();
+          }
+          logAccountStats(config.verbose, getAccountStats());
+          return;
+        }
+
+
 
         if (outcome.status === "error") {
           ensureHeaders();
@@ -647,7 +671,8 @@ export async function handleChatCompletions(
       latency.mark("spawn_start");
       const outcome = await runStreamWithAccountFailover({
         signal: abortController.signal,
-        preferConfigDir: affinity?.configDir,
+        requiredModel: cursorModel,
+          preferConfigDir: affinity?.configDir,
         onAccountFailover,
         onCommit: ensureHeaders,
         onChunk: (text) => {
@@ -746,6 +771,35 @@ export async function handleChatCompletions(
         return;
       }
 
+        if (outcome.status === "model_not_allowed") {
+          latency.mark("shape_done");
+          logLatency(config, latency, { ok: false, model: displayModel });
+          if (!headersWritten) {
+            json(res, 403, {
+              error: {
+                message: MODEL_NOT_ALLOWED_MESSAGE(outcome.model),
+                code: MODEL_NOT_ALLOWED_CODE,
+                model: outcome.model,
+              },
+            });
+          } else {
+            res.write(
+              `data: ${JSON.stringify({
+                error: {
+                  message: MODEL_NOT_ALLOWED_MESSAGE(outcome.model),
+                  code: MODEL_NOT_ALLOWED_CODE,
+                  model: outcome.model,
+                },
+              })}\n\n`,
+            );
+            res.write("data: [DONE]\n\n");
+            res.end();
+          }
+          logAccountStats(config.verbose, getAccountStats());
+          return;
+        }
+
+
 
       if (outcome.status === "error") {
         logAgentError(
@@ -819,6 +873,7 @@ export async function handleChatCompletions(
     },
     abortController.signal,
     {
+      requiredModel: cursorModel,
       preferConfigDir: affinity?.configDir,
       onAccountFailover,
     },
@@ -827,7 +882,9 @@ export async function handleChatCompletions(
     res,
     config,
     outcome,
-    outcome.status === "aborted" ? undefined : outcome.result?.stderr,
+    outcome.status === "ok" || outcome.status === "error"
+      ? outcome.result?.stderr
+      : undefined,
   );
   if (
     conversationId &&
@@ -886,6 +943,21 @@ export async function handleChatCompletions(
     return;
   }
 
+  if (outcome.status === "model_not_allowed") {
+    latency.mark("shape_done");
+    logLatency(config, latency, { ok: false, model: displayModel });
+    json(res, 403, {
+      error: {
+        message: MODEL_NOT_ALLOWED_MESSAGE(outcome.model),
+        code: MODEL_NOT_ALLOWED_CODE,
+        model: outcome.model,
+      },
+    });
+    logAccountStats(config.verbose, getAccountStats());
+    return;
+  }
+
+
 
   if (outcome.status === "error") {
     logAccountStats(config.verbose, getAccountStats());
@@ -918,7 +990,7 @@ export async function handleChatCompletions(
   if (!latency.has("model_complete")) latency.mark("model_complete");
   const content = (outcome.result.stdout ?? "").trim();
   annotateRequest(res, { completionChars: content.length });
-  logTrafficResponse(config.verbose, model ?? cursorModel, content, false);
+  logTrafficResponse(config.verbose, displayModel, content, false);
 
   const promptTokens = Math.max(1, Math.round(agentPrompt.length / 4));
   const completionTokens = Math.max(1, Math.round(content.length / 4));

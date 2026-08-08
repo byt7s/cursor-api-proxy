@@ -9,6 +9,10 @@ import { ACCOUNTS_DIR } from "../cli/constants.js";
 import { saveApiKeyAccount } from "../cli/login.js";
 import { runResetHwid } from "../cli/reset-hwid.js";
 import { writeAccountApiKey } from "./account-api-key.js";
+import {
+  readAccountAllowedModels,
+  writeAccountAllowedModels,
+} from "./account-models.js";
 import { describeApiKeys } from "./api-keys.js";
 import {
   appendAuditRecord,
@@ -212,6 +216,7 @@ function sanitizedBridgeConfig(
     host: config.host,
     port: config.port,
     defaultModel: config.defaultModel,
+    modelAliases: config.modelAliases,
     mode: config.mode,
     force: config.force,
     approveMcps: config.approveMcps,
@@ -447,6 +452,10 @@ export function handleAdminDashboard(
     return getStatus(config, version, (s) => json(res, 200, s));
   }
 
+  const accountModelsMatch = /^\/api\/accounts\/([^/]+)\/models$/.exec(
+    pathname,
+  );
+
   const sensitiveGet =
     req.method === "GET" &&
     (pathname === "/api/config" ||
@@ -454,7 +463,8 @@ export function handleAdminDashboard(
       pathname === "/api/accounts" ||
       pathname === "/api/doctor" ||
       pathname === "/api/audit" ||
-      pathname === "/api/requests");
+      pathname === "/api/requests" ||
+      Boolean(accountModelsMatch));
 
   const isMutating =
     req.method === "POST" || req.method === "PUT" || req.method === "DELETE";
@@ -638,6 +648,9 @@ export function handleAdminDashboard(
   }
   if (req.method === "DELETE" && pathname.startsWith("/api/accounts/")) {
     const name = decodeURIComponent(pathname.slice("/api/accounts/".length));
+    if (name.includes("/")) {
+      return json(res, 404, { error: "not found" });
+    }
     try {
       removeAccountDir(name);
       return json(res, 200, { ok: true, name });
@@ -660,6 +673,46 @@ export function handleAdminDashboard(
         const msg = e instanceof Error ? e.message : String(e);
         const status = /not found/i.test(msg) ? 404 : 400;
         return json(res, status, { error: msg });
+      }
+    });
+  }
+  if (accountModelsMatch && (req.method === "GET" || req.method === "PUT")) {
+    const name = decodeURIComponent(accountModelsMatch[1]!);
+    const configDir = path.join(ACCOUNTS_DIR, name);
+    if (!fs.existsSync(configDir)) {
+      return json(res, 404, { error: `Account '${name}' not found` });
+    }
+    if (req.method === "GET") {
+      const allowedModels = readAccountAllowedModels(configDir) ?? [];
+      return json(res, 200, {
+        name,
+        allowedModels,
+        unrestricted: allowedModels.length === 0,
+      });
+    }
+    return readJsonBody(req, config.maxBodyBytes, (err, body) => {
+      if (err) return jsonBodyError(res, err);
+      const raw = body.allowedModels ?? body.models;
+      if (raw !== undefined && !Array.isArray(raw)) {
+        return json(res, 400, {
+          error: "allowedModels must be an array of strings",
+        });
+      }
+      const models = Array.isArray(raw)
+        ? raw.map((m) => String(m).trim()).filter(Boolean)
+        : [];
+      try {
+        writeAccountAllowedModels(configDir, models);
+        const allowedModels = readAccountAllowedModels(configDir) ?? [];
+        return json(res, 200, {
+          ok: true,
+          name,
+          allowedModels,
+          unrestricted: allowedModels.length === 0,
+        });
+      } catch (e) {
+        const msg = e instanceof Error ? e.message : String(e);
+        return json(res, 400, { error: msg });
       }
     });
   }

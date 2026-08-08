@@ -150,9 +150,10 @@ The plist label is **`com.cursor-api-proxy`**. Use **`cursor-api-proxy disable`*
   - `POST /api/log/clear`
   - `POST /api/accounts` `{ "name", "apiKey" }` — API-key account add (reuses `saveApiKeyAccount`)
   - `PUT /api/accounts/:name/key` `{ "apiKey" }` — attach key to existing account
+  - `GET` / `PUT /api/accounts/:name/models` — per-account model allowlist (`{ "allowedModels": string[] }`; empty clears the file so all models are allowed)
   - `DELETE /api/accounts/:name` — remove account directory
   - `POST /api/reset-hwid` `{ "deepClean"?: boolean }` — destructive Cursor HWID reset
-  - `PUT /api/config/file` `{ "values": { … } }` — replace the config file contents
+  - `PUT /api/config/file` `{ "values": { … } }` — replace the config file contents (including `modelAliases`)
 - `GET /api/config/file` returns `{ path, exists, values, warnings, sources, effective, keys, refusedKeys }`. `sources` maps every documented key to `cli` / `env` / `file` / `default`; `keys` is the schema the **Config** page renders (type, enum values, group, whether the dashboard may write it). `PUT` validates first, refuses credential keys and non-editable keys with **400** naming the key, then writes to a sibling temp file and renames it into place. The response adds `written`, `restartRequired` (values that change once the proxy restarts) and `noEffect` (written, but a flag or variable still wins).
 - Interactive browser login is **not** exposed over HTTP; use CLI `cursor-api-proxy login`.
 - Responses never include raw API keys. Auth badges: `API key`, `CLI`, or `CLI + key` when a session account also has `.cursor-api-key`.
@@ -161,8 +162,9 @@ The plist label is **`com.cursor-api-proxy`**. Use **`cursor-api-proxy disable`*
 
 **`GET /accounts` notes**
 
-- Returns `{ "accounts": [ … ] }` with fields such as `name`, `authMethod`, `email`, `plan`, `usage`, `usageError`, `hasApiKey`.
+- Returns `{ "accounts": [ … ] }` with fields such as `name`, `authMethod`, `email`, `plan`, `usage`, `usageError`, `hasApiKey`, `allowedModels`.
 - Agent API keys (`crsr_…`) can enrich email / key metadata via Cursor `GET /v1/me`. **Key-only** accounts keep plan/usage `null` (`usageError: "api_key_unsupported"`). A CLI/browser session JWT can coexist with `.cursor-api-key` on the same account dir (`set-key`); plan/usage then come from the session while the key remains available for key-based execution.
+- **Model routing:** global aliases via `CURSOR_BRIDGE_MODEL_ALIASES` / config `modelAliases` rewrite client ids before the Anthropic/SDK maps. Per-account allowlists live in `~/.cursor-api-proxy/accounts/<name>/.cursor-bridge-models` (one id per line); missing/empty = unrestricted. If no account allows the resolved model the LLM routes return **403** with `code: "model_not_allowed_for_any_account"`.
 
 ---
 
@@ -176,6 +178,7 @@ The plist label is **`com.cursor-api-proxy`**. Use **`cursor-api-proxy disable`*
 | `docs/WIKI.md` | Wiki source |
 | `scripts/cursor-api-proxy` | Launcher script (symlink target) |
 | `~/.cursor-api-proxy/config.json` | Optional JSON config file (`CURSOR_BRIDGE_CONFIG_FILE`). Loses to CLI flags and environment variables, wins over defaults; credentials are refused. Editable from the dashboard **Config** page |
+| `~/.cursor-api-proxy/accounts/<name>/.cursor-bridge-models` | Optional per-account model allowlist (one id per line; `#` comments). Missing/empty = allow all |
 | `~/.cursor-api-proxy/sessions.log` | Default request log (one line per finished response) |
 | `~/.cursor-api-proxy/requests.jsonl` | Structured request log (one JSON record per response; rotates to `.1`, see `CURSOR_BRIDGE_REQUESTS_LOG*`) |
 | `~/.cursor-api-proxy/audit.jsonl` | Audit trail of dashboard mutations (one JSON record per attempt; rotates to `.1`, see `CURSOR_BRIDGE_AUDIT_LOG*`) |

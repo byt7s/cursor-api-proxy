@@ -24,7 +24,14 @@ import * as path from "node:path";
 
 export type ConfigValueSource = "cli" | "env" | "file" | "default";
 
-export type ConfigFileType = "string" | "number" | "boolean" | "string[]" | "enum";
+export type ConfigFileType =
+  | "string"
+  | "number"
+  | "boolean"
+  | "string[]"
+  | "enum"
+  /** JSON object (e.g. model alias map). Serialized to env as a JSON string. */
+  | "object";
 
 export type ConfigFileKeySpec = {
   /** camelCase key as it appears in config.json. */
@@ -55,6 +62,7 @@ export const CONFIG_FILE_KEYS: ConfigFileKeySpec[] = [
 
   { key: "defaultModel", env: "CURSOR_BRIDGE_DEFAULT_MODEL", type: "string", group: "Models", label: "Default model", editable: true },
   { key: "strictModel", env: "CURSOR_BRIDGE_STRICT_MODEL", type: "boolean", group: "Models", label: "Strict model", editable: true },
+  { key: "modelAliases", env: "CURSOR_BRIDGE_MODEL_ALIASES", type: "object", group: "Models", label: "Model aliases", editable: true },
   { key: "mode", env: "CURSOR_BRIDGE_MODE", type: "enum", values: ["agent", "ask", "plan"], group: "Models", label: "Default mode", editable: true },
   { key: "maxMode", env: "CURSOR_BRIDGE_MAX_MODE", type: "boolean", group: "Models", label: "Max mode", editable: true },
   { key: "force", env: "CURSOR_BRIDGE_FORCE", type: "boolean", group: "Models", label: "Force", editable: true },
@@ -114,7 +122,7 @@ export const REFUSED_CONFIG_KEYS = [
 
 export type ConfigFileValues = Record<
   string,
-  string | number | boolean | string[]
+  string | number | boolean | string[] | Record<string, string>
 >;
 
 /** Thrown for a value the file cannot mean; the message always names the key. */
@@ -158,7 +166,7 @@ export type ParsedConfigFile = {
 export function validateConfigValue(
   spec: ConfigFileKeySpec,
   raw: unknown,
-): string | number | boolean | string[] {
+): string | number | boolean | string[] | Record<string, string> {
   switch (spec.type) {
     case "boolean":
       if (typeof raw !== "boolean") {
@@ -203,6 +211,32 @@ export function validateConfigValue(
         );
       }
       return raw;
+    case "object": {
+      if (!raw || typeof raw !== "object" || Array.isArray(raw)) {
+        throw new ConfigFileError(
+          `config file key "${spec.key}" must be a JSON object (got ${describe(raw)})`,
+          spec.key,
+        );
+      }
+      const out: Record<string, string> = {};
+      for (const [key, value] of Object.entries(raw as Record<string, unknown>)) {
+        if (typeof value !== "string") {
+          throw new ConfigFileError(
+            `config file key "${spec.key}.${key}" must be a string (got ${describe(value)})`,
+            spec.key,
+          );
+        }
+        const k = key.trim();
+        if (!k) {
+          throw new ConfigFileError(
+            `config file key "${spec.key}" contains an empty key`,
+            spec.key,
+          );
+        }
+        out[k] = value.trim();
+      }
+      return out;
+    }
   }
 }
 
@@ -269,10 +303,11 @@ export function readConfigFile(filePath: string): ParsedConfigFile {
 /** Serializes a value the way the matching environment variable expects it. */
 export function configValueToEnv(
   spec: ConfigFileKeySpec,
-  value: string | number | boolean | string[],
+  value: string | number | boolean | string[] | Record<string, string>,
 ): string {
   if (spec.type === "boolean") return value ? "true" : "false";
   if (spec.type === "string[]") return (value as string[]).join(",");
+  if (spec.type === "object") return JSON.stringify(value);
   return String(value);
 }
 
@@ -408,6 +443,28 @@ export function writeConfigFile(
 function sameValue(a: unknown, b: unknown): boolean {
   if (Array.isArray(a) && Array.isArray(b)) {
     return a.length === b.length && a.every((item, i) => item === b[i]);
+  }
+  if (
+    a &&
+    b &&
+    typeof a === "object" &&
+    typeof b === "object" &&
+    !Array.isArray(a) &&
+    !Array.isArray(b)
+  ) {
+    const aEntries = Object.entries(a as Record<string, unknown>).sort(
+      ([x], [y]) => x.localeCompare(y),
+    );
+    const bEntries = Object.entries(b as Record<string, unknown>).sort(
+      ([x], [y]) => x.localeCompare(y),
+    );
+    return (
+      aEntries.length === bEntries.length &&
+      aEntries.every(
+        ([key, value], i) =>
+          key === bEntries[i]![0] && value === bEntries[i]![1],
+      )
+    );
   }
   return a === b;
 }

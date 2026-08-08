@@ -1,6 +1,7 @@
 import * as path from "node:path";
 
 import {
+  anyAccountAllowsModel,
   getAccountPoolSize,
   getNextAccountConfigDir,
   getUsableCount,
@@ -50,6 +51,12 @@ export type SyncFailoverAllDisabled = {
   latencyMs: number;
 };
 
+export type SyncFailoverModelNotAllowed = {
+  status: "model_not_allowed";
+  model: string;
+  latencyMs: number;
+};
+
 export type SyncFailoverAborted = {
   status: "aborted";
 };
@@ -58,6 +65,7 @@ export type SyncFailoverOutcome<T extends AgentAttemptResult> =
   | SyncFailoverSuccess<T>
   | SyncFailoverAllRateLimited
   | SyncFailoverAllDisabled
+  | SyncFailoverModelNotAllowed
   | SyncFailoverAborted;
 
 export type FailoverReason =
@@ -100,7 +108,18 @@ export type AccountFailoverOptions = {
   preferConfigDir?: string;
   /** Called when leaving an account for failover (rate-limit / plan / busy). */
   onAccountFailover?: (configDir: string) => void;
+  /**
+   * Skip accounts whose `.cursor-bridge-models` allowlist excludes this model.
+   * When every pooled account excludes it → `model_not_allowed`.
+   */
+  requiredModel?: string;
 };
+
+function modelNotAllowedOutcome(
+  model: string,
+): SyncFailoverModelNotAllowed {
+  return { status: "model_not_allowed", model, latencyMs: 0 };
+}
 
 export async function runSyncWithAccountFailover<T extends AgentAttemptResult>(
   runOnce: (configDir: string | undefined) => Promise<T>,
@@ -114,14 +133,29 @@ export async function runSyncWithAccountFailover<T extends AgentAttemptResult>(
     latencyMs: number;
   } | undefined;
 
+  if (
+    options?.requiredModel &&
+    getAccountPoolSize() > 0 &&
+    !anyAccountAllowsModel(options.requiredModel)
+  ) {
+    return modelNotAllowedOutcome(options.requiredModel);
+  }
+
   while (!signal?.aborted) {
     const configDir = getNextAccountConfigDir({
       exclude: tried,
       prefer: options?.preferConfigDir,
+      requiredModel: options?.requiredModel,
     });
     if (!configDir) {
       // Pool has accounts but none are available (disabled / rate-limited / excluded).
       if (getAccountPoolSize() > 0) {
+        if (
+          options?.requiredModel &&
+          !anyAccountAllowsModel(options.requiredModel)
+        ) {
+          return modelNotAllowedOutcome(options.requiredModel);
+        }
         return {
           status: poolExhaustedStatus(),
           result: lastRateLimited?.result,
@@ -301,6 +335,15 @@ export type StreamFailoverAllDisabled = {
   committed: false;
 };
 
+export type StreamFailoverModelNotAllowed = {
+  status: "model_not_allowed";
+  model: string;
+  code: number;
+  stderr: string;
+  latencyMs: number;
+  committed: false;
+};
+
 export type StreamFailoverAborted = {
   status: "aborted";
   committed: boolean;
@@ -310,6 +353,7 @@ export type StreamFailoverOutcome =
   | StreamFailoverSuccess
   | StreamFailoverAllRateLimited
   | StreamFailoverAllDisabled
+  | StreamFailoverModelNotAllowed
   | StreamFailoverAborted;
 
 /**
@@ -334,6 +378,7 @@ export async function runStreamWithAccountFailover(opts: {
   onThought?: (chunk: string) => void;
   preferConfigDir?: string;
   onAccountFailover?: (configDir: string) => void;
+  requiredModel?: string;
 }): Promise<StreamFailoverOutcome> {
   const { signal, runOnce, onCommit, onChunk, onThought } = opts;
   const tried = new Set<string>();
@@ -344,6 +389,21 @@ export async function runStreamWithAccountFailover(opts: {
     configDir: string | undefined;
     latencyMs: number;
   } | undefined;
+
+  if (
+    opts.requiredModel &&
+    getAccountPoolSize() > 0 &&
+    !anyAccountAllowsModel(opts.requiredModel)
+  ) {
+    return {
+      status: "model_not_allowed",
+      model: opts.requiredModel,
+      code: 1,
+      stderr: MODEL_NOT_ALLOWED_MESSAGE(opts.requiredModel),
+      latencyMs: 0,
+      committed: false,
+    };
+  }
 
   const deliver = (chunk: string) => {
     if (!committed) {
@@ -366,9 +426,20 @@ export async function runStreamWithAccountFailover(opts: {
     const configDir = getNextAccountConfigDir({
       exclude: tried,
       prefer: opts.preferConfigDir,
+      requiredModel: opts.requiredModel,
     });
     if (!configDir) {
       if (getAccountPoolSize() > 0) {
+        if (opts.requiredModel && !anyAccountAllowsModel(opts.requiredModel)) {
+          return {
+            status: "model_not_allowed",
+            model: opts.requiredModel,
+            code: 1,
+            stderr: MODEL_NOT_ALLOWED_MESSAGE(opts.requiredModel),
+            latencyMs: 0,
+            committed: false,
+          };
+        }
         const status = poolExhaustedStatus();
         return {
           status,
@@ -451,6 +522,17 @@ export async function runStreamWithAccountFailover(opts: {
         } finally {
           reportRequestEnd(undefined);
         }
+      }
+
+      if (opts.requiredModel && !anyAccountAllowsModel(opts.requiredModel)) {
+        return {
+          status: "model_not_allowed",
+          model: opts.requiredModel,
+          code: 1,
+          stderr: MODEL_NOT_ALLOWED_MESSAGE(opts.requiredModel),
+          latencyMs: 0,
+          committed: false,
+        };
       }
 
       const status = poolExhaustedStatus();
@@ -595,3 +677,9 @@ export const ALL_ACCOUNTS_RATE_LIMITED_MESSAGE =
 
 export const ALL_ACCOUNTS_DISABLED_MESSAGE =
   "No usable Cursor accounts (all disabled).";
+
+export const MODEL_NOT_ALLOWED_CODE = "model_not_allowed_for_any_account";
+
+export function MODEL_NOT_ALLOWED_MESSAGE(model: string): string {
+  return `No configured account allows model "${model}".`;
+}

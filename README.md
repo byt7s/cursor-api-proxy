@@ -223,6 +223,7 @@ Keys are the camelCase form of the variable name — `CURSOR_BRIDGE_DEFAULT_MODE
 {
   "port": 9000,
   "defaultModel": "auto",
+  "modelAliases": { "gpt-4o": "composer-2", "claude-3-5-sonnet": "sonnet-4.5" },
   "defaultEngine": "sdk",
   "thoughtMode": "reasoning",
   "toolCalls": true,
@@ -258,6 +259,7 @@ Environment handling is centralized in one module. Aliases, defaults, path resol
 | `CURSOR_BRIDGE_WORKSPACE` | process cwd | Base workspace directory for Cursor CLI. With `CURSOR_BRIDGE_CHAT_ONLY_WORKSPACE=false`, header `X-Cursor-Workspace` must point to an **existing directory under this path** (after resolving real paths). |
 | `CURSOR_BRIDGE_MODE` | — | Server default for Cursor CLI `--mode`: **`agent`**, **`ask`**, or **`plan`**. If unset, default is **`ask`**. **Env wins over** CLI `--mode` when both are set. Per request, JSON body **`mode`** or header **`X-Cursor-Mode`** overrides (precedence: body → header → this env → `--mode` → `ask`). Invalid value → startup error. With **`agent`** (or **`plan`**) and real workspace, the CLI may **read/write files** under `CURSOR_BRIDGE_WORKSPACE` / cwd—see `CURSOR_BRIDGE_CHAT_ONLY_WORKSPACE`. |
 | `CURSOR_BRIDGE_DEFAULT_MODEL` | `auto` | Default model when request omits one |
+| `CURSOR_BRIDGE_MODEL_ALIASES` | `{}` | JSON object mapping client model ids → Cursor model ids (e.g. `{"gpt-4o":"composer-2"}`). Applied early in resolution (before Anthropic/SDK maps). Empty alias targets return **400** `invalid_model_alias`. Config file key: `modelAliases`. |
 | `CURSOR_BRIDGE_STRICT_MODEL` | `true` | Use last requested model when none specified |
 | `CURSOR_BRIDGE_FORCE` | `false` | Pass `--force` to Cursor CLI |
 | `CURSOR_BRIDGE_APPROVE_MCPS` | `false` | Pass `--approve-mcps` to Cursor CLI |
@@ -285,6 +287,7 @@ Environment handling is centralized in one module. Aliases, defaults, path resol
 | `CURSOR_BRIDGE_ADMISSION_WAIT_MS` | `5000` | How long to wait for an admission permit before failing with capacity **503**. |
 | `CURSOR_BRIDGE_USE_ACP` | `true` | When `true` (default), uses **ACP** over stdio (`agent acp`) with a **warm process per account** (new `session/new` each request — no shared chat memory). If every warm worker is busy, spawns a temporary ACP for that prompt. Set `false` to use `agent --print` per request. See [Cursor ACP docs](https://cursor.com/docs/cli/acp). Set `NODE_DEBUG=cursor-api-proxy:acp` to debug. |
 | `CURSOR_BRIDGE_DEFAULT_ENGINE` | `acp` | Default execution engine when an account has no `.cursor-bridge-engine` file. `acp` (default) uses the Cursor agent CLI/ACP path (Node >=18). `sdk` uses in-process `@cursor/sdk` (requires **Node >=22.13** and a Dashboard API key on that account or `CURSOR_API_KEY`). Per-account override: write `sdk` or `acp` to `~/.cursor-api-proxy/accounts/<name>/.cursor-bridge-engine`. |
+| Per-account model allowlist | — | Optional file `~/.cursor-api-proxy/accounts/<name>/.cursor-bridge-models`: one Cursor model id per line (`#` comments). Missing/empty = allow all. When selecting an account for a request, accounts that do not allow the resolved model are skipped; if none allow it the proxy returns **403** `model_not_allowed_for_any_account`. Editable via `GET`/`PUT /api/accounts/:name/models` and the dashboard **Accounts** page. |
 | Conversation sticky id | — | Send `X-Cursor-Conversation-Id` (preferred), or JSON `conversation_id`, or an opaque OpenAI `user` value. The proxy pins the same account (and SDK `Agent.resume` when engine=sdk). On account failover the pin is cleared and the client's resent `messages` replay context on a new account. |
 | `CURSOR_BRIDGE_ACP_SKIP_AUTHENTICATE` | auto | When `CURSOR_API_KEY` is set, skips the ACP authenticate step. Set to `true` to skip when using `agent login` instead. |
 | `CURSOR_BRIDGE_ACP_RAW_DEBUG` | `false` | When `1` or `true`, log raw JSON-RPC from ACP stdout (requires `NODE_DEBUG=cursor-api-proxy:acp`). |

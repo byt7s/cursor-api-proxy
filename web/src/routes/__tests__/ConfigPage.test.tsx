@@ -97,6 +97,7 @@ const FILE = {
     defaultModel: "gpt-5",
     mode: "ask",
     toolCalls: false,
+    modelAliases: {},
   },
   keys: KEYS,
   refusedKeys: ["apiKey", "dashboardKey"],

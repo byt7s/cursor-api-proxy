@@ -19,8 +19,7 @@ import type { BridgeConfig } from "../config.js";
 import type { CursorExecutionMode } from "../execution-mode.js";
 import type { ModelCacheRef } from "./models.js";
 import { json, writeSseHeaders } from "../http.js";
-import { resolveModelWithoutCatalog } from "../model-map.js";
-import { normalizeModelId, toolsToSystemText } from "../openai.js";
+import { toolsToSystemText } from "../openai.js";
 import {
   logAgentError,
   logAccountStats,
@@ -29,7 +28,7 @@ import {
   logTrafficResponse,
   type TrafficMessage,
 } from "../request-log.js";
-import { rememberResolvedModel, resolveModel } from "../resolve-model.js";
+import { resolveRequestModel } from "../resolve-request-model.js";
 import { resolveRequestMode } from "../resolve-mode.js";
 import { resolveWorkspace } from "../workspace.js";
 import { sanitizeMessages, sanitizeSystem } from "../sanitize.js";
@@ -37,6 +36,8 @@ import { getAccountStats } from "../account-pool.js";
 import {
   ALL_ACCOUNTS_DISABLED_MESSAGE,
   ALL_ACCOUNTS_RATE_LIMITED_MESSAGE,
+  MODEL_NOT_ALLOWED_CODE,
+  MODEL_NOT_ALLOWED_MESSAGE,
   runStreamWithAccountFailover,
   runSyncWithAccountFailover,
 } from "../account-failover.js";
@@ -63,20 +64,14 @@ export async function handleAnthropicMessages(
 ): Promise<void> {
   const { config, lastRequestedModelRef } = ctx;
   const body = JSON.parse(rawBody || "{}") as AnthropicMessagesRequest;
-  const requested = normalizeModelId(body.model);
-  const model = resolveModel(requested, lastRequestedModelRef, config);
   // Skip agent --list-models on the hot path (~2s); GET /v1/models still lists.
-  const decision = resolveModelWithoutCatalog({
-    requested: model,
-    defaultModel: config.defaultModel,
-  });
-  const cursorModel = decision.final;
-  rememberResolvedModel(cursorModel, lastRequestedModelRef);
+  const modelResolution = resolveRequestModel(body.model, lastRequestedModelRef, config);
+  if (!modelResolution.ok) {
+    json(res, modelResolution.status, modelResolution.body);
+    return;
+  }
+  const { cursorModel, displayModel, decision } = modelResolution;
   logModelResolution(config.verbose, decision);
-  const displayModel =
-    decision.requestedWasDefault && config.defaultModel !== "default"
-      ? config.defaultModel
-      : model;
 
   const cleanSystem = sanitizeSystem(body.system);
   const cleanMessages = sanitizeMessages(
@@ -126,7 +121,7 @@ export async function handleAnthropicMessages(
   }
   logTrafficRequest(
     config.verbose,
-    model ?? cursorModel,
+    displayModel,
     trafficMessages,
     !!body.stream,
   );
@@ -244,7 +239,7 @@ export async function handleAnthropicMessages(
           id: msgId,
           type: "message",
           role: "assistant",
-          model: displayModel ?? cursorModel,
+          displayModel: displayModel ?? cursorModel,
           content: [],
         },
       });
@@ -258,7 +253,7 @@ export async function handleAnthropicMessages(
     const finishAnthropicStream = (accumulated: string) => {
       logTrafficResponse(
         config.verbose,
-        model ?? cursorModel,
+        displayModel,
         accumulated,
         true,
       );
@@ -275,6 +270,7 @@ export async function handleAnthropicMessages(
       let accumulated = "";
       try {
         const outcome = await runStreamWithAccountFailover({
+          requiredModel: cursorModel,
           signal: abortController.signal,
           onCommit: ensureHeaders,
           onChunk: (chunk) => {
@@ -346,6 +342,31 @@ export async function handleAnthropicMessages(
           logAccountStats(config.verbose, getAccountStats());
           return;
         }
+        if (outcome.status === "model_not_allowed") {
+        if (!headersWritten) {
+        json(res, 403, {
+        error: {
+        message: MODEL_NOT_ALLOWED_MESSAGE(outcome.model),
+        code: MODEL_NOT_ALLOWED_CODE,
+        model: outcome.model,
+        },
+        });
+        } else {
+        res.write(
+        `data: ${JSON.stringify({
+        error: {
+        message: MODEL_NOT_ALLOWED_MESSAGE(outcome.model),
+        code: MODEL_NOT_ALLOWED_CODE,
+        model: outcome.model,
+        },
+        })}\n\n`,
+        );
+        res.write("data: [DONE]\n\n");
+        res.end();
+        }
+        logAccountStats(config.verbose, getAccountStats());
+        return;
+        }
 
 
         if (outcome.status === "error") {
@@ -410,6 +431,7 @@ export async function handleAnthropicMessages(
     let accumulated = "";
     try {
       const outcome = await runStreamWithAccountFailover({
+          requiredModel: cursorModel,
         signal: abortController.signal,
         onCommit: ensureHeaders,
         onChunk: (text) => {
@@ -471,6 +493,31 @@ export async function handleAnthropicMessages(
         logAccountStats(config.verbose, getAccountStats());
         return;
       }
+      if (outcome.status === "model_not_allowed") {
+      if (!headersWritten) {
+      json(res, 403, {
+      error: {
+      message: MODEL_NOT_ALLOWED_MESSAGE(outcome.model),
+      code: MODEL_NOT_ALLOWED_CODE,
+      model: outcome.model,
+      },
+      });
+      } else {
+      res.write(
+      `data: ${JSON.stringify({
+      error: {
+      message: MODEL_NOT_ALLOWED_MESSAGE(outcome.model),
+      code: MODEL_NOT_ALLOWED_CODE,
+      model: outcome.model,
+      },
+      })}\n\n`,
+      );
+      res.write("data: [DONE]\n\n");
+      res.end();
+      }
+      logAccountStats(config.verbose, getAccountStats());
+      return;
+      }
 
 
       if (outcome.status === "error") {
@@ -528,6 +575,7 @@ export async function handleAnthropicMessages(
         abortController.signal,
       ),
     abortController.signal,
+    { requiredModel: cursorModel },
   );
 
   if (outcome.status === "aborted") {
@@ -564,6 +612,17 @@ export async function handleAnthropicMessages(
     });
     return;
   }
+  if (outcome.status === "model_not_allowed") {
+  json(res, 403, {
+  error: {
+  message: MODEL_NOT_ALLOWED_MESSAGE(outcome.model),
+  code: MODEL_NOT_ALLOWED_CODE,
+  model: outcome.model,
+  },
+  });
+  logAccountStats(config.verbose, getAccountStats());
+  return;
+  }
 
 
   if (outcome.status === "error") {
@@ -583,7 +642,7 @@ export async function handleAnthropicMessages(
   }
 
   const content = (outcome.result.stdout ?? "").trim();
-  logTrafficResponse(config.verbose, model ?? cursorModel, content, false);
+  logTrafficResponse(config.verbose, displayModel, content, false);
   logAccountStats(config.verbose, getAccountStats());
   const inTok = Math.max(1, Math.round(agentPrompt.length / 4));
   const outTok = Math.max(1, Math.round(content.length / 4));
@@ -595,7 +654,7 @@ export async function handleAnthropicMessages(
       type: "message",
       role: "assistant",
       content: [{ type: "text", text: content }],
-      model: displayModel ?? cursorModel,
+      displayModel: displayModel ?? cursorModel,
       stop_reason: "end_turn",
       usage: {
         input_tokens: inTok,

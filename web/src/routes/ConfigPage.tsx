@@ -17,6 +17,7 @@ import {
   PageHeader,
   Select,
   Stack,
+  Textarea,
   useToast,
   type KeyValueItem,
 } from "../design-system";
@@ -73,6 +74,14 @@ const GROUPS: Group[] = [
     items: (c) => [
       { key: "defaultModel", label: "Default model", value: c.defaultModel, mono: true },
       { key: "strictModel", label: "Strict model", value: bool(c.strictModel) },
+      {
+        key: "modelAliases",
+        label: "Model aliases",
+        value:
+          c.modelAliases && Object.keys(c.modelAliases).length > 0
+            ? `${Object.keys(c.modelAliases).length} alias(es)`
+            : "none",
+      },
       { key: "mode", label: "Mode", value: c.mode, mono: true },
       { key: "maxMode", label: "Max mode", value: bool(c.maxMode) },
       { key: "force", label: "Force", value: bool(c.force, "warning") },
@@ -241,12 +250,17 @@ function displayValue(value: unknown): string {
   if (value === undefined || value === null || value === "") return "—";
   if (Array.isArray(value)) return value.length ? value.join(", ") : "—";
   if (typeof value === "boolean") return value ? "on" : "off";
+  if (value && typeof value === "object") {
+    const keys = Object.keys(value as Record<string, unknown>);
+    return keys.length ? JSON.stringify(value) : "—";
+  }
   return String(value);
 }
 
 function toInputText(value: ConfigFileValue | undefined): string {
   if (value === undefined) return "";
   if (Array.isArray(value)) return value.join(", ");
+  if (value && typeof value === "object") return JSON.stringify(value, null, 2);
   return String(value);
 }
 
@@ -478,6 +492,42 @@ export function ConfigPage() {
                             onValueChange={(next) =>
                               setValue(spec.key, next === "" ? undefined : next)
                             }
+                          />
+                        </FormField>
+                      );
+                    }
+
+                    if (spec.type === "object") {
+                      return (
+                        <FormField key={spec.key} label={label} help={help}>
+                          <Textarea
+                            rows={4}
+                            value={toInputText(value)}
+                            disabled={locked}
+                            placeholder='{"gpt-4o":"composer-2"}'
+                            onChange={(event) => {
+                              const raw = event.target.value.trim();
+                              if (!raw) return setValue(spec.key, undefined);
+                              try {
+                                const parsed = JSON.parse(raw) as unknown;
+                                if (
+                                  !parsed ||
+                                  typeof parsed !== "object" ||
+                                  Array.isArray(parsed)
+                                ) {
+                                  return;
+                                }
+                                const obj: Record<string, string> = {};
+                                for (const [k, v] of Object.entries(
+                                  parsed as Record<string, unknown>,
+                                )) {
+                                  if (typeof v === "string") obj[k] = v;
+                                }
+                                setValue(spec.key, obj);
+                              } catch {
+                                /* keep typing until JSON is valid */
+                              }
+                            }}
                           />
                         </FormField>
                       );

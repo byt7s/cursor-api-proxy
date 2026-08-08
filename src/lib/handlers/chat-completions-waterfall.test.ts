@@ -75,6 +75,7 @@ function createTestConfig(overrides: Partial<BridgeConfig> = {}): BridgeConfig {
     sdkMaxConcurrentRunsPerAccount: 12,
     thoughtMode: "drop",
     toolCalls: false,
+    modelAliases: {},
     maxConcurrentRuns: 16,
     maxConcurrentRunsPerAccount: 2,
     admissionWaitMs: 0,
