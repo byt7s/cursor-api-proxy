@@ -1,11 +1,9 @@
 import { screen } from "@testing-library/react";
-import userEvent from "@testing-library/user-event";
 import { describe, expect, it } from "vitest";
 
 import { mockFetch } from "../../../test/mockFetch";
 import { renderWithProviders } from "../../../test/renderWithProviders";
 import { ConfigPage } from "../ConfigPage";
-import { RequestsPage } from "../RequestsPage";
 import { WikiPage } from "../WikiPage";
 
 describe("ConfigPage", () => {
@@ -27,6 +25,10 @@ describe("ConfigPage", () => {
           sdkMaxConcurrentRunsPerAccount: 12,
           admissionWaitMs: 0,
           configDirsCount: 2,
+          requestsLogPath: "/tmp/requests.jsonl",
+          requestsLogEnabled: true,
+          requestsLogMaxBytes: 33_554_432,
+          metricsEnabled: true,
         },
       },
     });
@@ -36,41 +38,9 @@ describe("ConfigPage", () => {
     expect(screen.getByText("Admission — SDK plane")).toBeVisible();
     expect(screen.getByText("CURSOR_BRIDGE_API_KEY required")).toBeVisible();
     expect(screen.getByText("cursor-agent")).toBeVisible();
-  });
-});
-
-describe("RequestsPage", () => {
-  it("lists requests and re-fetches with a new limit", async () => {
-    const fetchMock = mockFetch({
-      "GET /api/requests": {
-        body: {
-          path: "/tmp/sessions.log",
-          requests: [
-            {
-              ts: "2026-08-08T00:00:00.000Z",
-              method: "POST",
-              pathname: "/v1/chat/completions",
-              status: 500,
-            },
-          ],
-        },
-      },
-    });
-    renderWithProviders(<RequestsPage />);
-
-    expect(
-      await screen.findByRole("cell", { name: "/v1/chat/completions" }),
-    ).toBeVisible();
-    expect(screen.getByText("500")).toBeVisible();
-    expect(fetchMock.calls[0].url).toBe("/api/requests?limit=40");
-
-    await userEvent.selectOptions(screen.getByLabelText("Request limit"), "200");
-    expect(
-      await screen.findByRole("cell", { name: "/v1/chat/completions" }),
-    ).toBeVisible();
-    expect(
-      fetchMock.calls.some((c) => c.url === "/api/requests?limit=200"),
-    ).toBe(true);
+    expect(screen.getByText("Observability")).toBeVisible();
+    expect(screen.getByText("/tmp/requests.jsonl")).toBeVisible();
+    expect(screen.getByText("32 MB")).toBeVisible();
   });
 });
 
