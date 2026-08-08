@@ -1,7 +1,18 @@
 import { spawn, type ChildProcess } from "node:child_process";
+import * as path from "node:path";
+import {
+  getAccountApiKeyEnv,
+  withAccountApiKeyArgs,
+} from "./account-api-key.js";
 import { resolveAgentCommand } from "./env.js";
 import { DETACH_CHILDREN, killProcessTree } from "./process-tree-kill.js";
 import { runMaxModePreflight } from "./max-mode-preflight.js";
+
+/** Only the Cursor agent understands `--api-key` (not arbitrary `node` test cmds). */
+function isCursorAgentBin(cmd: string): boolean {
+  const base = path.basename(cmd).replace(/\.cmd$/i, "").toLowerCase();
+  return base === "agent" || base === "cursor-agent";
+}
 
 export type RunResult = {
   code: number;
@@ -65,20 +76,38 @@ function spawnChild(
     configDir?: string;
   },
 ) {
-  const resolved = resolveAgentCommand(cmd, args);
+  // Force --api-key on argv: CURSOR_API_KEY env is ignored when CURSOR_CONFIG_DIR
+  // points at an API-key account stub (CLI falls back to Keychain).
+  const agentArgs = isCursorAgentBin(cmd)
+    ? withAccountApiKeyArgs(args, opts?.configDir)
+    : args;
+  const resolved = resolveAgentCommand(cmd, agentArgs);
 
   if (opts?.maxMode) {
     runMaxModePreflight(resolved.agentScriptPath, opts?.configDir);
   }
 
   const env = { ...resolved.env };
-  if (opts?.configDir) {
-    env.CURSOR_CONFIG_DIR = opts.configDir;
-  } else if (resolved.configDir && !env.CURSOR_CONFIG_DIR) {
-    env.CURSOR_CONFIG_DIR = resolved.configDir;
+  const accountApiKeyEnv = getAccountApiKeyEnv(opts?.configDir);
+  // API-key accounts use a stub cli-config under configDir. Pointing
+  // CURSOR_CONFIG_DIR there makes the CLI ignore --api-key/env and hit
+  // macOS Keychain (cursor-access-token), failing with Security exit 45 /
+  // "Password not found".
+  if (!accountApiKeyEnv) {
+    if (opts?.configDir) {
+      env.CURSOR_CONFIG_DIR = opts.configDir;
+    } else if (resolved.configDir && !env.CURSOR_CONFIG_DIR) {
+      env.CURSOR_CONFIG_DIR = resolved.configDir;
+    }
+  }
+  if (accountApiKeyEnv) {
+    Object.assign(env, accountApiKeyEnv);
   }
   if (opts?.envOverrides) {
     Object.assign(env, opts.envOverrides);
+  }
+  if (accountApiKeyEnv) {
+    delete env.CURSOR_CONFIG_DIR;
   }
 
   const useStdin = typeof opts?.stdinContent === "string";

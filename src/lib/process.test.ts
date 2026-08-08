@@ -42,6 +42,83 @@ describe("run", () => {
     expect(result.stdout).toBe("/test/account/dir");
   });
 
+  it("injects CURSOR_API_KEY from account .cursor-api-key file", async () => {
+    const fs = await import("node:fs");
+    const os = await import("node:os");
+    const path = await import("node:path");
+    const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "cap-proc-key-"));
+    try {
+      fs.writeFileSync(path.join(tmp, ".cursor-api-key"), "sk-from-account", {
+        mode: 0o600,
+      });
+      const result = await run(
+        node,
+        [
+          "-e",
+          "process.stdout.write([process.env.CURSOR_API_KEY, process.env.CURSOR_AUTH_TOKEN, process.env.AGENT_CLI_CREDENTIAL_STORE || 'unset', process.env.CURSOR_CONFIG_DIR || 'unset'].join('|'))",
+        ],
+        { configDir: tmp },
+      );
+      expect(result.code).toBe(0);
+      // API-key accounts: file credential store, no CURSOR_CONFIG_DIR (Keychain trap).
+      expect(result.stdout).toBe(
+        "sk-from-account|sk-from-account|file|unset",
+      );
+    } finally {
+      fs.rmSync(tmp, { recursive: true, force: true });
+    }
+  });
+
+  it("still sets CURSOR_CONFIG_DIR for CLI-login accounts without api key", async () => {
+    const fs = await import("node:fs");
+    const os = await import("node:os");
+    const path = await import("node:path");
+    const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "cap-proc-cli-"));
+    try {
+      const result = await run(
+        node,
+        ["-e", "process.stdout.write(process.env.CURSOR_CONFIG_DIR || 'unset')"],
+        { configDir: tmp },
+      );
+      expect(result.code).toBe(0);
+      expect(result.stdout).toBe(tmp);
+    } finally {
+      fs.rmSync(tmp, { recursive: true, force: true });
+    }
+  });
+
+  it("prepends --api-key argv when spawning agent with account key", async () => {
+    const fs = await import("node:fs");
+    const os = await import("node:os");
+    const path = await import("node:path");
+    const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "cap-proc-key-"));
+    try {
+      fs.writeFileSync(path.join(tmp, ".cursor-api-key"), "sk-argv-key", {
+        mode: 0o600,
+      });
+      // Fake `agent` binary that echoes argv (spawn requires executable bit).
+      const agentShim = path.join(tmp, "agent");
+      fs.writeFileSync(
+        agentShim,
+        `#!/usr/bin/env node\nprocess.stdout.write(JSON.stringify(process.argv.slice(2)))\n`,
+        { mode: 0o755 },
+      );
+      const result = await run(agentShim, ["--print", "--model", "auto"], {
+        configDir: tmp,
+      });
+      expect(result.code).toBe(0);
+      expect(JSON.parse(result.stdout)).toEqual([
+        "--api-key",
+        "sk-argv-key",
+        "--print",
+        "--model",
+        "auto",
+      ]);
+    } finally {
+      fs.rmSync(tmp, { recursive: true, force: true });
+    }
+  });
+
   it("does not set CURSOR_CONFIG_DIR when configDir is omitted", async () => {
     const result = await run(node, [
       "-e",

@@ -348,6 +348,20 @@ describe("discoverAccountDirs filtering", () => {
     expect(loaded.configDirs[0]).toContain("auth-account");
   });
 
+  it("auto-discovers API-key accounts via .cursor-api-key", () => {
+    const accountsDir = makeTmpAccounts();
+    const apiDir = path.join(accountsDir, "api-account");
+    fs.mkdirSync(apiDir, { recursive: true });
+    fs.writeFileSync(path.join(apiDir, ".cursor-api-key"), "sk-test", {
+      mode: 0o600,
+    });
+    writeCliConfig(path.join(accountsDir, "no-auth-account"), false);
+
+    const loaded = loadEnvConfig({ env: { HOME: tmpBase }, cwd: "/workspace" });
+    expect(loaded.configDirs).toHaveLength(1);
+    expect(loaded.configDirs[0]).toContain("api-account");
+  });
+
   it("returns empty configDirs when all account dirs are unauthenticated", () => {
     const accountsDir = makeTmpAccounts();
     writeCliConfig(path.join(accountsDir, "no-auth-1"), false);

@@ -1,6 +1,7 @@
 import fs from "node:fs";
 import path from "node:path";
 
+import { isApiKeyAccount } from "../lib/account-api-key.js";
 import { ACCOUNTS_DIR } from "./constants.js";
 import {
   readCachedToken,
@@ -26,6 +27,8 @@ export interface AccountInfo {
   plan?: string;
   subscriptionStatus?: string;
   expiresAt?: string;
+  /** How this account was authenticated. */
+  authMethod?: "cli" | "api-key";
 }
 
 // ---------------------------------------------------------------------------
@@ -39,21 +42,50 @@ export interface AccountInfo {
 export function readAccountInfo(name: string, configDir: string): AccountInfo {
   const info: AccountInfo = { name, configDir, authenticated: false };
 
+  if (isApiKeyAccount(configDir)) {
+    info.authMethod = "api-key";
+  }
+
   const configFile = path.join(configDir, "cli-config.json");
-  if (!fs.existsSync(configFile)) return info;
+  if (!fs.existsSync(configFile)) {
+    if (info.authMethod === "api-key") {
+      info.authenticated = true;
+      info.email = `api-key@${name}`;
+      info.displayName = `API key (${name})`;
+      info.authId = `api-key:${name}`;
+    }
+    return info;
+  }
 
   try {
     const raw = JSON.parse(fs.readFileSync(configFile, "utf-8")) as {
+      authMethod?: string;
       authInfo?: { email?: string; displayName?: string; authId?: string };
     };
+    if (raw.authMethod === "api-key" || info.authMethod === "api-key") {
+      info.authMethod = "api-key";
+    } else if (raw.authInfo) {
+      info.authMethod = "cli";
+    }
     if (raw.authInfo) {
       info.authenticated = true;
       info.email = raw.authInfo.email;
       info.displayName = raw.authInfo.displayName;
       info.authId = raw.authInfo.authId;
+    } else if (info.authMethod === "api-key") {
+      info.authenticated = true;
+      info.email = `api-key@${name}`;
+      info.displayName = `API key (${name})`;
+      info.authId = `api-key:${name}`;
     }
   } catch {
-    // malformed config — treat as unauthenticated
+    // malformed config — treat as unauthenticated unless API key file exists
+    if (info.authMethod === "api-key") {
+      info.authenticated = true;
+      info.email = `api-key@${name}`;
+      info.displayName = `API key (${name})`;
+      info.authId = `api-key:${name}`;
+    }
   }
 
   const statsigFile = path.join(configDir, "statsig-cache.json");
@@ -158,7 +190,12 @@ export async function handleAccountsList(): Promise<void> {
 
       if (info.email) {
         const display = info.displayName ? ` (${info.displayName})` : "";
-        console.log(`     � ${info.email}${display}`);
+        console.log(`     📧 ${info.email}${display}`);
+      }
+      if (info.authMethod === "api-key") {
+        console.log(`     🔐 Auth: API key`);
+      } else {
+        console.log(`     🔐 Auth: Cursor CLI`);
       }
       // Show static plan only when live data isn't available (avoids contradictions)
       if (info.plan && !liveProfile) {
@@ -174,6 +211,8 @@ export async function handleAccountsList(): Promise<void> {
       }
       if (liveUsage) {
         for (const line of formatUsageSummary(liveUsage)) console.log(line);
+      } else if (info.authMethod === "api-key" && token && !liveUsage) {
+        console.log(`     ℹ️  Live usage unavailable for this API key`);
       }
     } else {
       console.log(`     ⚠️  Not authenticated`);

@@ -1,5 +1,10 @@
 import * as fs from "node:fs";
 
+import {
+  getAccountApiKeyEnv,
+  readAccountApiKey,
+  withAccountApiKeyArgs,
+} from "./account-api-key.js";
 import { runAcpStream, runAcpSync } from "./acp-client.js";
 import type { BridgeConfig } from "./config.js";
 import type { CursorExecutionMode } from "./execution-mode.js";
@@ -9,8 +14,20 @@ import { readKeychainToken, writeCachedToken } from "./token-cache.js";
 
 function cacheTokenForAccount(configDir?: string): void {
   if (!configDir) return;
+  // API-key accounts already store the key; don't overwrite with keychain JWT.
+  if (readAccountApiKey(configDir)) return;
   const token = readKeychainToken();
   if (token) writeCachedToken(configDir, token);
+}
+
+function applyAccountApiKeyToAcp(
+  acpEnv: Record<string, string | undefined>,
+  configDir?: string,
+): boolean {
+  const keyEnv = getAccountApiKeyEnv(configDir);
+  if (!keyEnv) return false;
+  Object.assign(acpEnv, keyEnv);
+  return true;
 }
 
 export type AgentRunResult = {
@@ -68,9 +85,21 @@ export function runAgentSync(
     let args = acpArgsWithWorkspace(config.acpArgs, workspaceDir);
     args = acpModel ? acpArgsWithModel(args, acpModel) : args;
     args = acpArgsWithMode(args, acpMode);
+    args = withAccountApiKeyArgs(args, configDir);
     const acpEnv = { ...config.acpEnv };
+    const hasAccountApiKey = applyAccountApiKeyToAcp(acpEnv, configDir);
     if (effectiveChatOnly) {
-      Object.assign(acpEnv, getChatOnlyEnvOverrides(workspaceDir, configDir));
+      Object.assign(
+        acpEnv,
+        getChatOnlyEnvOverrides(
+          workspaceDir,
+          // Don't point ACP at stub API-key account dirs (Keychain fallback).
+          hasAccountApiKey ? undefined : configDir,
+        ),
+      );
+    }
+    if (hasAccountApiKey) {
+      delete acpEnv.CURSOR_CONFIG_DIR;
     }
     return runAcpSync(config.acpCommand, args, stdinPrompt, {
       cwd: workspaceDir,
@@ -79,7 +108,7 @@ export function runAgentSync(
       model: acpModel,
       requestTimeoutMs: config.timeoutMs,
       spawnOptions: config.acpSpawnOptions,
-      skipAuthenticate: config.acpSkipAuthenticate,
+      skipAuthenticate: config.acpSkipAuthenticate || hasAccountApiKey,
       rawDebug: config.acpRawDebug,
       signal,
     }).then((out) => {
@@ -95,7 +124,10 @@ export function runAgentSync(
     });
   }
   const runEnvOverrides = effectiveChatOnly
-    ? getChatOnlyEnvOverrides(workspaceDir, configDir)
+    ? getChatOnlyEnvOverrides(
+        workspaceDir,
+        readAccountApiKey(configDir) ? undefined : configDir,
+      )
     : undefined;
   return run(config.agentBin, cmdArgs, {
     cwd: workspaceDir,
@@ -137,9 +169,20 @@ export function runAgentStream(
     let args = acpArgsWithWorkspace(config.acpArgs, workspaceDir);
     args = acpModel ? acpArgsWithModel(args, acpModel) : args;
     args = acpArgsWithMode(args, acpMode);
+    args = withAccountApiKeyArgs(args, configDir);
     const acpEnv = { ...config.acpEnv };
+    const hasAccountApiKey = applyAccountApiKeyToAcp(acpEnv, configDir);
     if (effectiveChatOnly) {
-      Object.assign(acpEnv, getChatOnlyEnvOverrides(workspaceDir, configDir));
+      Object.assign(
+        acpEnv,
+        getChatOnlyEnvOverrides(
+          workspaceDir,
+          hasAccountApiKey ? undefined : configDir,
+        ),
+      );
+    }
+    if (hasAccountApiKey) {
+      delete acpEnv.CURSOR_CONFIG_DIR;
     }
     return runAcpStream(
       config.acpCommand,
@@ -152,7 +195,7 @@ export function runAgentStream(
         model: acpModel,
         requestTimeoutMs: config.timeoutMs,
         spawnOptions: config.acpSpawnOptions,
-        skipAuthenticate: config.acpSkipAuthenticate,
+        skipAuthenticate: config.acpSkipAuthenticate || hasAccountApiKey,
         rawDebug: config.acpRawDebug,
         signal,
       },
@@ -170,7 +213,10 @@ export function runAgentStream(
     });
   }
   const streamEnvOverrides = effectiveChatOnly
-    ? getChatOnlyEnvOverrides(workspaceDir, configDir)
+    ? getChatOnlyEnvOverrides(
+        workspaceDir,
+        readAccountApiKey(configDir) ? undefined : configDir,
+      )
     : undefined;
   return runStreaming(config.agentBin, cmdArgs, {
     cwd: workspaceDir,
