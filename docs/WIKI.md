@@ -25,16 +25,16 @@ With the proxy **running**, open:
 
 | URL | Purpose |
 |-----|---------|
-| `http://127.0.0.1:8765/` | **Dashboard** — React single-page app with a sidebar: Overview, Requests, Logs, Accounts, Config, Diagnostics, Wiki, Settings |
+| `http://127.0.0.1:8765/` | **Dashboard** — React single-page app with a sidebar: Overview, Requests, Logs, Accounts, Config, Diagnostics, Audit, Wiki, Settings |
 | `http://127.0.0.1:8765/wiki` | **Wiki** — the same app, opened on the Wiki route, rendering `docs/WIKI.md` |
 | `http://127.0.0.1:8765/accounts` | JSON list of saved Cursor accounts (auth method, email, plan/usage when available) |
 | `http://127.0.0.1:8765/healthz` | Plain **`ok`** (for scripts and load checks) |
-| `http://127.0.0.1:8765/metrics` | **Prometheus** text exposition (loopback-only unless `CURSOR_BRIDGE_API_KEY` is set) |
+| `http://127.0.0.1:8765/metrics` | **Prometheus** text exposition (loopback-only until a dashboard or API key is configured) |
 | `http://127.0.0.1:8765/health` | JSON health payload (version, workspace, default model, …) |
 
 Port **`8765`** is the default (`CURSOR_BRIDGE_PORT`). Host defaults to **`127.0.0.1`** (`CURSOR_BRIDGE_HOST`).
 
-The app shell and its assets load without a key. When `CURSOR_BRIDGE_API_KEY` is set, mutating `/api/*` routes and sensitive reads (`/api/accounts`, `/api/config`, `/api/doctor`, `/api/requests`) require `Authorization: Bearer <CURSOR_BRIDGE_API_KEY>`. Paste that value into **Settings → Dashboard key** (stored in `sessionStorage` for the tab). If the key is unset, mutations are allowed only from loopback (`127.0.0.1` / `::1`). Keep the service on loopback in production.
+The app shell and its assets load without a key. Mutating `/api/*` routes and sensitive reads (`/api/accounts`, `/api/config`, `/api/doctor`, `/api/requests`, `/api/audit`) need `Authorization: Bearer …` — the dedicated `CURSOR_BRIDGE_DASHBOARD_KEY` when set, otherwise an `admin`-scoped entry from `CURSOR_BRIDGE_API_KEYS` or the legacy `CURSOR_BRIDGE_API_KEY`. Paste that value into **Settings → Dashboard key** (stored in `sessionStorage` for the tab); the same page lists every configured key by label, scope and fingerprint and marks the one this browser is using. With no key configured at all, mutations are allowed only from loopback (`127.0.0.1` / `::1`). Because the dashboard can create and remove accounts and reset the machine id, a dedicated dashboard key is recommended. Keep the service on loopback in production.
 
 Navigation is hash based (`/#/accounts`, `/#/logs`, …), so `GET /` and `GET /wiki` are the only HTML entry points the server has to serve. **Settings** also holds the light/dark theme toggle (persisted in `localStorage`) and the per-page polling intervals.
 
@@ -128,7 +128,7 @@ The plist label is **`com.cursor-api-proxy`**. Use **`cursor-api-proxy disable`*
 **LLM / health / accounts**
 
 - `GET /health`, `GET /healthz`, `GET /v1/models`
-- `GET /metrics` — Prometheus text format (`text/plain; version=0.0.4`). Bearer when `CURSOR_BRIDGE_API_KEY` is set, loopback-only otherwise, **404** when `CURSOR_BRIDGE_METRICS_ENABLED=false`. Exposes `cursor_proxy_requests_total`, `cursor_proxy_request_duration_seconds`, `cursor_proxy_span_duration_seconds` (latency waterfall), `cursor_proxy_admission_in_use` / `_limit`, `cursor_proxy_account_state`, `cursor_proxy_failover_total`, `cursor_proxy_rate_limited_total`, `cursor_proxy_build_info`
+- `GET /metrics` — Prometheus text format (`text/plain; version=0.0.4`). Same gate as the dashboard's sensitive reads (admin-scoped key → `CURSOR_BRIDGE_DASHBOARD_KEY` → `CURSOR_BRIDGE_API_KEY` → loopback-only), **404** when `CURSOR_BRIDGE_METRICS_ENABLED=false`. Exposes `cursor_proxy_requests_total`, `cursor_proxy_request_duration_seconds`, `cursor_proxy_span_duration_seconds` (latency waterfall), `cursor_proxy_admission_in_use` / `_limit`, `cursor_proxy_account_state`, `cursor_proxy_failover_total`, `cursor_proxy_rate_limited_total`, `cursor_proxy_build_info`
 - `GET /accounts` — JSON account pool listing (same data as `cursor-api-proxy accounts`; dashboard table uses `/api/accounts`)
 - `POST /v1/chat/completions`, `POST /v1/responses`, `POST /v1/messages`
 
@@ -136,7 +136,14 @@ The plist label is **`com.cursor-api-proxy`**. Use **`cursor-api-proxy disable`*
 
 - `GET /` and `GET /wiki` both serve `public/dashboard/index.html`; `GET /static/*` serves `public/*`, so bundles resolve at `/static/dashboard/assets/…` (always open)
 - `GET /api/status`, `GET /api/log`, `GET /api/stats`, `GET /api/wiki`
-- Sensitive reads (Bearer when `CURSOR_BRIDGE_API_KEY` is set): `GET /api/config`, `GET /api/accounts`, `GET /api/doctor`, `GET /api/requests?limit=`
+- Sensitive reads: `GET /api/config`, `GET /api/accounts`, `GET /api/doctor`, `GET /api/requests?limit=`, `GET /api/audit?limit=`
+- **Dashboard auth gate** (same for sensitive reads, mutations and `/metrics`), in precedence order:
+  1. an `admin`-scoped key from `CURSOR_BRIDGE_API_KEYS` — always accepted
+  2. `CURSOR_BRIDGE_DASHBOARD_KEY` when set — then nothing else opens the dashboard
+  3. the legacy `CURSOR_BRIDGE_API_KEY` when no dashboard key is set
+  4. otherwise loopback-only for mutations, open for sensitive reads
+  A `chat`-scoped key gets **403** (authenticated, wrong scope) rather than 401.
+- `GET /api/audit` returns `{ path, enabled, records }`, newest first, from `~/.cursor-api-proxy/audit.jsonl`. Each record has `ts`, `action`, `method`, `route`, `actor`, `actorFingerprint`, `remoteAddress`, `target`, `outcome` and `status`. Refused mutations are recorded too. Rendered by the **Audit** sidebar page.
 - `GET /api/requests` returns `{ path, source, requests }`. With the structured log enabled (`source: "jsonl"`) each entry carries `durationMs`, `model`, `engine`, `account`, `streaming`, `errorCode`, `failoverCount`, `spans` and prompt/completion character counts; the **Requests** page opens any row for the latency waterfall and the raw record. Without it (`source: "text"`) entries are the four fields parsed from `sessions.log`.
 - Mutations (Bearer when key set; else loopback only):
   - `POST /api/control` `{ "action": "start" | "stop" | "restart" | "enable" | "disable" }`
@@ -147,7 +154,8 @@ The plist label is **`com.cursor-api-proxy`**. Use **`cursor-api-proxy disable`*
   - `POST /api/reset-hwid` `{ "deepClean"?: boolean }` — destructive Cursor HWID reset
 - Interactive browser login is **not** exposed over HTTP; use CLI `cursor-api-proxy login`.
 - Responses never include raw API keys. Auth badges: `API key`, `CLI`, or `CLI + key` when a session account also has `.cursor-api-key`.
-- `GET /api/config` exposes real admission caps (`maxConcurrentRuns*`, `sdkMaxConcurrentRuns*`, `admissionWaitMs`) without secrets.
+- `GET /api/config` exposes real admission caps (`maxConcurrentRuns*`, `sdkMaxConcurrentRuns*`, `admissionWaitMs`) without secrets, plus the inbound key inventory as `{ label, scope, fingerprint }` and a `caller` field naming the credential this request used.
+- Request hardening applies to every route: bodies over `CURSOR_BRIDGE_MAX_BODY_BYTES` get **413**, keys over `CURSOR_BRIDGE_KEY_RATE_LIMIT_PER_MIN` get **429** with `Retry-After`, and CORS headers are emitted only for origins listed in `CURSOR_BRIDGE_CORS_ORIGINS` (`OPTIONS` preflight → **204**, disallowed origin → **403**).
 
 **`GET /accounts` notes**
 
@@ -167,6 +175,7 @@ The plist label is **`com.cursor-api-proxy`**. Use **`cursor-api-proxy disable`*
 | `scripts/cursor-api-proxy` | Launcher script (symlink target) |
 | `~/.cursor-api-proxy/sessions.log` | Default request log (one line per finished response) |
 | `~/.cursor-api-proxy/requests.jsonl` | Structured request log (one JSON record per response; rotates to `.1`, see `CURSOR_BRIDGE_REQUESTS_LOG*`) |
+| `~/.cursor-api-proxy/audit.jsonl` | Audit trail of dashboard mutations (one JSON record per attempt; rotates to `.1`, see `CURSOR_BRIDGE_AUDIT_LOG*`) |
 | `~/.cursor-api-proxy/proxy.log` | Launcher / background stdout+stderr |
 | `~/.cursor-api-proxy/proxy.pid` | Written by the running Node process for the dashboard |
 

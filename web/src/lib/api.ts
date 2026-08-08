@@ -1,6 +1,7 @@
 import type {
   AccountMutationResult,
   AccountsReport,
+  AuditPayload,
   ClearLogResult,
   ControlAction,
   ControlResult,
@@ -52,7 +53,7 @@ function messageFor(status: number, serverMessage: string | null): string {
   if (status === 401) {
     return serverMessage
       ? `${serverMessage} — save the dashboard key in Settings.`
-      : "Unauthorized: this proxy requires CURSOR_BRIDGE_API_KEY. Save the dashboard key in Settings.";
+      : "Unauthorized: this proxy requires a dashboard key (CURSOR_BRIDGE_DASHBOARD_KEY, an admin-scoped API key, or CURSOR_BRIDGE_API_KEY). Save it in Settings.";
   }
   if (status === 403) {
     return serverMessage
@@ -150,6 +151,8 @@ export const api = {
     apiRequest<ClearLogResult>("/api/log/clear", { method: "POST", body: {} }),
   requests: (limit = 40) =>
     apiRequest<RequestsPayload>(`/api/requests?limit=${limit}`),
+  audit: (limit = 100) =>
+    apiRequest<AuditPayload>(`/api/audit?limit=${limit}`),
   accounts: () => apiRequest<AccountsReport>("/api/accounts"),
   addAccount: (name: string, apiKey: string) =>
     apiRequest<AccountMutationResult>("/api/accounts", {

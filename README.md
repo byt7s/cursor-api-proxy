@@ -197,7 +197,7 @@ const client = new OpenAI({
 | GET    | `/health`              | Server and config info                                                |
 | GET    | `/accounts`            | JSON account list (auth, email, plan/usage when available; same data as `cursor-api-proxy accounts`) |
 | GET    | `/v1/models`           | List Cursor models (from `agent --list-models`)                       |
-| GET    | `/metrics`             | Prometheus text exposition (`CURSOR_BRIDGE_METRICS_ENABLED`); Bearer when `CURSOR_BRIDGE_API_KEY` is set, loopback-only otherwise |
+| GET    | `/metrics`             | Prometheus text exposition (`CURSOR_BRIDGE_METRICS_ENABLED`); same gate as the dashboard's sensitive reads (see [Securing the dashboard](#securing-the-dashboard)) |
 | POST   | `/v1/chat/completions` | Chat completion (OpenAI shape; supports `stream: true`)               |
 | POST   | `/v1/responses`        | Responses API text generation shape; supports semantic SSE streaming  |
 | POST   | `/v1/messages`         | Anthropic Messages API (used by Claude Code; supports `stream: true`) |
@@ -212,7 +212,15 @@ Environment handling is centralized in one module. Aliases, defaults, path resol
 |----------|---------|-------------|
 | `CURSOR_BRIDGE_HOST` | `127.0.0.1` | Bind address |
 | `CURSOR_BRIDGE_PORT` | `8765` | Port |
-| `CURSOR_BRIDGE_API_KEY` | — | If set, require `Authorization: Bearer <key>` on requests |
+| `CURSOR_BRIDGE_API_KEY` | — | If set, require `Authorization: Bearer <key>` (or `x-api-key`) on requests. Treated as a **`chat`**-scoped key. Still opens the dashboard when `CURSOR_BRIDGE_DASHBOARD_KEY` is not set — see [Securing the dashboard](#securing-the-dashboard). |
+| `CURSOR_BRIDGE_DASHBOARD_KEY` | — | **Recommended.** Dedicated Bearer key for dashboard sensitive reads/mutations and `/metrics`. When set it takes precedence: `CURSOR_BRIDGE_API_KEY` no longer opens the dashboard, only this key or an `admin`-scoped entry below does. |
+| `CURSOR_BRIDGE_API_KEYS` | — | Several labelled keys with a scope: `label:scope:key`, comma separated (e.g. `ci:chat:sk-one,ops:admin:sk-two`). Scope **`chat`** reaches the LLM routes; **`admin`** also reaches dashboard sensitive reads/mutations and `/metrics`. Malformed entries are skipped with a startup warning instead of failing. Raw values are never logged or returned — `/api/config` exposes only label, scope and a 6-char SHA-256 fingerprint. |
+| `CURSOR_BRIDGE_KEY_RATE_LIMIT_PER_MIN` | `0` (off) | Per-key request cap in a fixed 60-second window. Over the cap the proxy answers **429** with `Retry-After` (seconds until the window rolls over). Counted per key, so one noisy client cannot drain the account pool. |
+| `CURSOR_BRIDGE_AUDIT_LOG` | `~/.cursor-api-proxy/audit.jsonl` | JSONL audit trail: one record per mutating `/api/*` call with timestamp, action, actor (key label, `dashboard-key`, `bridge-api-key` or `loopback`), remote address, target, outcome and status. Refused attempts are recorded too. Never contains key values. Rotates like the request log. |
+| `CURSOR_BRIDGE_AUDIT_LOG_ENABLED` | `true` | Set `false` to stop writing the audit log (the dashboard **Audit** page then reports it as disabled). |
+| `CURSOR_BRIDGE_AUDIT_LOG_MAX_BYTES` | `8388608` (8 MB) | Rotate the audit log to `<path>.1` once it would exceed this size. `0` disables rotation. |
+| `CURSOR_BRIDGE_MAX_BODY_BYTES` | `8388608` (8 MB) | Reject larger JSON request bodies with **413** and a JSON error naming the limit. `0` disables the check. |
+| `CURSOR_BRIDGE_CORS_ORIGINS` | — (off) | Comma-separated origins allowed to call the proxy from a browser. When set, allowed responses carry `Access-Control-Allow-Origin` / `-Headers` / `-Methods` and `OPTIONS` preflights are answered with **204**; disallowed origins get **403** on preflight and no CORS headers. `*` allows any origin. Credentials are never allowed (the dashboard key travels in a header, not a cookie). |
 | `CURSOR_API_KEY` / `CURSOR_AUTH_TOKEN` | — | Cursor access token passed to spawned CLI/ACP children (automation, headless). Same value can be used for both names. |
 | `CURSOR_BRIDGE_WORKSPACE` | process cwd | Base workspace directory for Cursor CLI. With `CURSOR_BRIDGE_CHAT_ONLY_WORKSPACE=false`, header `X-Cursor-Workspace` must point to an **existing directory under this path** (after resolving real paths). |
 | `CURSOR_BRIDGE_MODE` | — | Server default for Cursor CLI `--mode`: **`agent`**, **`ask`**, or **`plan`**. If unset, default is **`ask`**. **Env wins over** CLI `--mode` when both are set. Per request, JSON body **`mode`** or header **`X-Cursor-Mode`** overrides (precedence: body → header → this env → `--mode` → `ask`). Invalid value → startup error. With **`agent`** (or **`plan`**) and real workspace, the CLI may **read/write files** under `CURSOR_BRIDGE_WORKSPACE` / cwd—see `CURSOR_BRIDGE_CHAT_ONLY_WORKSPACE`. |
@@ -298,6 +306,34 @@ Optional per-request overrides:
 - Header **`X-Cursor-Mode: <agent|ask|plan>`** or JSON body field **`mode`** — execution mode for that request (body wins over header).
 
 **CLI subcommands** (see `cursor-api-proxy --help`): `login <name>`, `set-key <name> <key>`, `accounts` (list), `logout`, `usage`, `reset-hwid` (see `--help` for options). Flags above still apply to the server entrypoint.
+
+## Securing the dashboard
+
+The dashboard is not read-only any more: it can **create and remove accounts**, attach Cursor Dashboard API keys and **reset the machine id**. Give it its own credential rather than reusing the key your LLM clients hold.
+
+Set `CURSOR_BRIDGE_DASHBOARD_KEY` and, if you want scoped LLM keys as well, list them in `CURSOR_BRIDGE_API_KEYS`:
+
+```bash
+export CURSOR_BRIDGE_DASHBOARD_KEY="$(openssl rand -hex 24)"
+export CURSOR_BRIDGE_API_KEYS="ci:chat:sk-ci-key,ops:admin:sk-ops-key"
+```
+
+**Who can do what**
+
+| Credential presented | LLM routes (`/v1/*`, `/health`, `/accounts`) | Dashboard sensitive reads + mutations, `/metrics` |
+|----------------------|----------------------------------------------|---------------------------------------------------|
+| `admin`-scoped key from `CURSOR_BRIDGE_API_KEYS` | yes | yes |
+| `CURSOR_BRIDGE_DASHBOARD_KEY` | no (dashboard only) | yes |
+| `chat`-scoped key from `CURSOR_BRIDGE_API_KEYS` | yes | **403** — authenticated, wrong scope |
+| `CURSOR_BRIDGE_API_KEY` (legacy) | yes | yes **only while** `CURSOR_BRIDGE_DASHBOARD_KEY` is unset |
+| Nothing, and no key configured | yes | reads yes; mutations only from loopback |
+| Nothing, some key configured | **401** | **401** |
+
+Precedence for the dashboard gate, in order: an `admin`-scoped key always wins; then `CURSOR_BRIDGE_DASHBOARD_KEY` when set (and nothing else opens the dashboard); then the legacy `CURSOR_BRIDGE_API_KEY`; then the original loopback fallback. Nothing about an existing single-key setup changes until you add the new variable.
+
+**What is recorded.** Every mutating `/api/*` call — successful or refused — is appended to `~/.cursor-api-proxy/audit.jsonl` and shown on the dashboard's **Audit** page: timestamp, action, actor label, remote address, target and outcome. Key values, account API keys and anything key-shaped are redacted before writing.
+
+**What is never exposed.** `/api/config` returns key **labels, scopes and 6-character SHA-256 fingerprints** only, plus which credential the calling browser used. Raw keys never reach the browser, the logs or the audit trail.
 
 ## Multi-Account Setup
 

@@ -13,11 +13,11 @@
  */
 
 import * as crypto from "node:crypto";
-import * as fs from "node:fs";
 import type * as http from "node:http";
 import * as path from "node:path";
 
 import type { ExecutionEngine } from "./execution-engine.js";
+import { appendJsonlRecord } from "./jsonl-log.js";
 import type {
   LatencySpanName,
   LatencyWaterfall,
@@ -143,41 +143,16 @@ export type RequestsLogOptions = {
   maxBytes: number;
 };
 
-/** Rename to `<path>.1` once the file would exceed `maxBytes`. */
-function rotateIfNeeded(
-  logPath: string,
-  maxBytes: number,
-  incomingBytes: number,
-): void {
-  if (maxBytes <= 0) return;
-  let size = 0;
-  try {
-    size = fs.statSync(logPath).size;
-  } catch {
-    return;
-  }
-  if (size + incomingBytes <= maxBytes) return;
-  try {
-    fs.renameSync(logPath, `${logPath}.1`);
-  } catch (err) {
-    console.error("Failed to rotate requests log:", err);
-  }
-}
-
 export function appendRequestRecord(
   record: RequestRecord,
   options: RequestsLogOptions,
 ): void {
   if (!options.enabled) return;
-  const line = `${JSON.stringify(record)}\n`;
-  try {
-    const dir = path.dirname(options.logPath);
-    if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
-    rotateIfNeeded(options.logPath, options.maxBytes, Buffer.byteLength(line));
-    fs.appendFileSync(options.logPath, line);
-  } catch (err) {
-    console.error("Failed to write requests log:", err);
-  }
+  appendJsonlRecord(
+    record,
+    { logPath: options.logPath, maxBytes: options.maxBytes },
+    "requests log",
+  );
 }
 
 export function parseRequestRecordLine(line: string): RequestRecord | null {

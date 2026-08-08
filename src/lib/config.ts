@@ -2,6 +2,7 @@ import * as fs from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 
+import type { ApiKeyEntry } from "./api-keys.js";
 import type { ExecutionEngine } from "./execution-engine.js";
 import type { CursorExecutionMode } from "./execution-mode.js";
 import { loadEnvConfig, resolveAgentCommand, type EnvOptions } from "./env.js";
@@ -30,7 +31,22 @@ export type BridgeConfig = {
   acpEnv: Record<string, string | undefined>;
   host: string;
   port: number;
+  /** Legacy single inbound key (`CURSOR_BRIDGE_API_KEY`). */
   requiredKey?: string;
+  /** Dedicated dashboard key; when set it is the only way in besides admin keys. */
+  dashboardKey?: string;
+  /** Every inbound key with its scope (see `CURSOR_BRIDGE_API_KEYS`). */
+  apiKeys: ApiKeyEntry[];
+  /** Per-key requests-per-minute cap; 0 disables throttling. */
+  keyRateLimitPerMin: number;
+  /** JSONL audit log for dashboard mutations. */
+  auditLogPath: string;
+  auditLogEnabled: boolean;
+  auditLogMaxBytes: number;
+  /** Reject JSON bodies over this size with 413; 0 disables the check. */
+  maxBodyBytes: number;
+  /** Allowed browser origins; empty means no CORS headers are emitted. */
+  corsOrigins: string[];
   defaultModel: string;
   mode: CursorExecutionMode;
   force: boolean;
@@ -117,6 +133,10 @@ export function loadBridgeConfig(opts: EnvOptions = {}): BridgeConfig {
   const apiKey = envSource.CURSOR_API_KEY ?? envSource.CURSOR_AUTH_TOKEN;
   const acpArgs = acpResolved.args;
 
+  for (const warning of env.apiKeyWarnings) {
+    console.warn(`[config] ${warning}`);
+  }
+
   const acpEnv = { ...acpResolved.env } as Record<string, string | undefined>;
   if (apiKey) {
     acpEnv.CURSOR_API_KEY = apiKey;
@@ -131,6 +151,14 @@ export function loadBridgeConfig(opts: EnvOptions = {}): BridgeConfig {
     host: env.host,
     port: env.port,
     requiredKey: env.requiredKey,
+    dashboardKey: env.dashboardKey,
+    apiKeys: env.apiKeys,
+    keyRateLimitPerMin: env.keyRateLimitPerMin,
+    auditLogPath: env.auditLogPath,
+    auditLogEnabled: env.auditLogEnabled,
+    auditLogMaxBytes: env.auditLogMaxBytes,
+    maxBodyBytes: env.maxBodyBytes,
+    corsOrigins: env.corsOrigins,
     defaultModel: env.defaultModel,
     mode: env.mode ?? opts.mode ?? "ask",
     force: env.force,

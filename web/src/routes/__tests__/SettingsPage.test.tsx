@@ -17,7 +17,7 @@ describe("SettingsPage", () => {
     expect(screen.getByText(/No key stored/)).toBeVisible();
 
     await userEvent.type(
-      screen.getByLabelText(/CURSOR_BRIDGE_API_KEY/),
+      screen.getByLabelText(/CURSOR_BRIDGE_DASHBOARD_KEY/),
       "bridge-secret",
     );
     await userEvent.click(screen.getByRole("button", { name: "Save in session" }));
@@ -32,7 +32,7 @@ describe("SettingsPage", () => {
 
     await userEvent.click(screen.getByRole("button", { name: "Clear" }));
     expect(window.sessionStorage.getItem(DASHBOARD_KEY_STORAGE)).toBeNull();
-    expect(screen.getByLabelText(/CURSOR_BRIDGE_API_KEY/)).toHaveValue("");
+    expect(screen.getByLabelText(/CURSOR_BRIDGE_DASHBOARD_KEY/)).toHaveValue("");
   });
 
   it("switches theme and stores the choice", async () => {

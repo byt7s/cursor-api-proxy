@@ -1,17 +1,18 @@
-import * as crypto from "node:crypto";
 import type * as http from "node:http";
 
 import type { BridgeConfig } from "../config.js";
-import { extractBearerToken, isLoopbackAddress, json } from "../http.js";
+import { authorizeSensitiveApi } from "../dashboard-auth.js";
+import { json } from "../http.js";
 import { METRICS_CONTENT_TYPE, renderMetrics } from "../metrics.js";
 
 export const METRICS_PATH = "/metrics";
 
 /**
- * `/metrics` exposes account names, model ids and traffic volume, so it is
- * gated like the dashboard's sensitive reads: Bearer when `CURSOR_BRIDGE_API_KEY`
- * is set, loopback-only otherwise. `CURSOR_BRIDGE_METRICS_ENABLED=false` makes
- * the route disappear (404).
+ * `/metrics` exposes account names, model ids and traffic volume, so it shares
+ * the dashboard's sensitive-read gate: an admin-scoped key or the dedicated
+ * dashboard key when either is configured, the legacy `CURSOR_BRIDGE_API_KEY`
+ * otherwise, and loopback-only when nothing is set.
+ * `CURSOR_BRIDGE_METRICS_ENABLED=false` makes the route disappear (404).
  */
 export function authorizeMetrics(
   req: http.IncomingMessage,
@@ -26,30 +27,15 @@ export function authorizeMetrics(
     };
   }
 
-  if (config.requiredKey) {
-    const token = Buffer.from(extractBearerToken(req) ?? "", "utf8");
-    const expected = Buffer.from(config.requiredKey, "utf8");
-    const match =
-      token.length === expected.length &&
-      crypto.timingSafeEqual(token, expected);
-    if (!match) {
-      return {
-        ok: false,
-        status: 401,
-        message: "Authorization Bearer CURSOR_BRIDGE_API_KEY required",
-        code: "unauthorized",
-      };
-    }
-    return { ok: true };
-  }
-
-  if (!isLoopbackAddress(req.socket?.remoteAddress)) {
+  // Metrics are a read, but they leak enough to deserve the mutate-grade
+  // loopback check when no key is configured at all.
+  const auth = authorizeSensitiveApi(req, config, "mutate");
+  if (!auth.ok) {
     return {
       ok: false,
-      status: 403,
-      message:
-        "Metrics are loopback-only unless CURSOR_BRIDGE_API_KEY is set",
-      code: "forbidden",
+      status: auth.status,
+      message: auth.error,
+      code: auth.status === 401 ? "unauthorized" : "forbidden",
     };
   }
   return { ok: true };

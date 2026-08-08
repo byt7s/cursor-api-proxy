@@ -2,12 +2,25 @@ import * as fs from "node:fs";
 import * as path from "node:path";
 
 import {
+  buildApiKeyRegistry,
+  parseApiKeys,
+  type ApiKeyEntry,
+} from "./api-keys.js";
+import {
+  DEFAULT_AUDIT_LOG_MAX_BYTES,
+  defaultAuditLogPath,
+} from "./audit-log.js";
+import { parseCorsOrigins } from "./cors.js";
+import {
   parseExecutionEngine,
   type ExecutionEngine,
 } from "./execution-engine.js";
 import type { CursorExecutionMode } from "./execution-mode.js";
 import { tryParseExecutionModeEnv } from "./execution-mode.js";
 import { DEFAULT_REQUESTS_LOG_MAX_BYTES } from "./request-record.js";
+
+/** Default ceiling for JSON request bodies (8 MB). */
+export const DEFAULT_MAX_BODY_BYTES = 8 * 1024 * 1024;
 
 export type EnvSource = Record<string, string | undefined>;
 
@@ -28,6 +41,22 @@ export type LoadedEnv = {
   host: string;
   port: number;
   requiredKey?: string;
+  /** Dedicated dashboard key (`CURSOR_BRIDGE_DASHBOARD_KEY`), when set. */
+  dashboardKey?: string;
+  /** Legacy key plus every `CURSOR_BRIDGE_API_KEYS` entry, with scopes. */
+  apiKeys: ApiKeyEntry[];
+  /** Non-fatal problems found while parsing `CURSOR_BRIDGE_API_KEYS`. */
+  apiKeyWarnings: string[];
+  /** Requests per minute allowed per key (0 disables the limit). */
+  keyRateLimitPerMin: number;
+  /** JSONL audit log for dashboard mutations. */
+  auditLogPath: string;
+  auditLogEnabled: boolean;
+  auditLogMaxBytes: number;
+  /** Reject JSON bodies larger than this with 413 (0 disables the check). */
+  maxBodyBytes: number;
+  /** Origins allowed for browser cross-origin calls (empty = CORS off). */
+  corsOrigins: string[];
   defaultModel: string;
   force: boolean;
   approveMcps: boolean;
@@ -374,6 +403,17 @@ export function loadEnvConfig(opts: EnvOptions = {}): LoadedEnv {
     return path.join(cwd, "requests.jsonl");
   })();
 
+  const auditLogPath = (() => {
+    const explicit = resolveAbsolutePath(
+      envString(env, ["CURSOR_BRIDGE_AUDIT_LOG"]),
+      cwd,
+    );
+    return explicit ?? defaultAuditLogPath(home, cwd);
+  })();
+
+  const requiredKey = envString(env, ["CURSOR_BRIDGE_API_KEY"]);
+  const scopedKeys = parseApiKeys(envString(env, ["CURSOR_BRIDGE_API_KEYS"]));
+
   const force = envBool(env, ["CURSOR_BRIDGE_FORCE"], false);
 
   const rawConfigDirs = envString(env, [
@@ -429,7 +469,29 @@ export function loadEnvConfig(opts: EnvOptions = {}): LoadedEnv {
     commandShell: envString(env, ["COMSPEC"]) ?? "cmd.exe",
     host,
     port,
-    requiredKey: envString(env, ["CURSOR_BRIDGE_API_KEY"]),
+    requiredKey,
+    dashboardKey: envString(env, ["CURSOR_BRIDGE_DASHBOARD_KEY"]),
+    apiKeys: buildApiKeyRegistry(requiredKey, scopedKeys.entries),
+    apiKeyWarnings: scopedKeys.warnings,
+    keyRateLimitPerMin: Math.max(
+      0,
+      envNumber(env, ["CURSOR_BRIDGE_KEY_RATE_LIMIT_PER_MIN"], 0),
+    ),
+    auditLogPath,
+    auditLogEnabled: envBool(env, ["CURSOR_BRIDGE_AUDIT_LOG_ENABLED"], true),
+    auditLogMaxBytes: Math.max(
+      0,
+      envNumber(
+        env,
+        ["CURSOR_BRIDGE_AUDIT_LOG_MAX_BYTES"],
+        DEFAULT_AUDIT_LOG_MAX_BYTES,
+      ),
+    ),
+    maxBodyBytes: Math.max(
+      0,
+      envNumber(env, ["CURSOR_BRIDGE_MAX_BODY_BYTES"], DEFAULT_MAX_BODY_BYTES),
+    ),
+    corsOrigins: parseCorsOrigins(envString(env, ["CURSOR_BRIDGE_CORS_ORIGINS"])),
     defaultModel: normalizeModelId(
       envString(env, ["CURSOR_BRIDGE_DEFAULT_MODEL"]),
     ),

@@ -1,8 +1,14 @@
-import * as crypto from "node:crypto";
 import * as fs from "node:fs";
 import * as http from "node:http";
 
+import {
+  apiKeyFingerprint,
+  buildApiKeyRegistry,
+  matchApiKey,
+} from "./api-keys.js";
 import type { BridgeConfig } from "./config.js";
+import { applyCors } from "./cors.js";
+import { consumeKeyRateLimit } from "./key-rate-limit.js";
 import type { ModelCacheRef } from "./handlers/models.js";
 import { handleHealth } from "./handlers/health.js";
 import { handleModels } from "./handlers/models.js";
@@ -15,7 +21,12 @@ import {
   handleAdminDashboard,
 } from "./admin-dashboard.js";
 import { handleMetrics, METRICS_PATH } from "./handlers/metrics.js";
-import { extractBearerToken, json, readBody } from "./http.js";
+import {
+  BodyTooLargeError,
+  extractBearerToken,
+  json,
+  readBody,
+} from "./http.js";
 import { observeRequest } from "./metrics.js";
 import { appendSessionLine, logIncoming } from "./request-log.js";
 import {
@@ -33,6 +44,12 @@ export function createRequestListener(opts: BridgeServerOptions) {
   const { config } = opts;
   const modelCacheRef: ModelCacheRef = { current: undefined };
   const lastRequestedModelRef: { current?: string } = {};
+  // `loadEnvConfig` already folds the legacy key into `apiKeys`; configs built
+  // by hand (tests, embedders) may only carry `requiredKey`.
+  const inboundKeys =
+    config.apiKeys.length > 0
+      ? config.apiKeys
+      : buildApiKeyRegistry(config.requiredKey, []);
 
   return async (req: http.IncomingMessage, res: http.ServerResponse) => {
     const protocol = config.tlsCertPath && config.tlsKeyPath ? "https" : "http";
@@ -90,6 +107,10 @@ export function createRequestListener(opts: BridgeServerOptions) {
     }
 
     try {
+      // CORS headers (when configured) must be attached before any handler
+      // writes, and a preflight never reaches the auth gate.
+      if (applyCors(req, res, config.corsOrigins).preflightHandled) return;
+
       if (req.method === "GET" && pathname === "/healthz") {
         res.writeHead(200, { "content-type": "text/plain" });
         res.end("ok\n");
@@ -106,17 +127,32 @@ export function createRequestListener(opts: BridgeServerOptions) {
         return;
       }
 
-      if (config.requiredKey) {
-        const token = extractBearerToken(req) ?? "";
-        const expected = config.requiredKey;
-        const a = Buffer.from(token, "utf8");
-        const b = Buffer.from(expected, "utf8");
-        const match =
-          a.length === b.length && crypto.timingSafeEqual(a, b);
-        if (!match) {
+      // Any configured key (chat or admin scope) reaches the LLM routes; the
+      // per-key limit only applies once we know which key is calling.
+      if (inboundKeys.length > 0) {
+        const matched = matchApiKey(inboundKeys, extractBearerToken(req));
+        if (!matched) {
           json(res, 401, {
             error: { message: "Invalid API key", code: "unauthorized" },
           });
+          return;
+        }
+        const decision = consumeKeyRateLimit(
+          apiKeyFingerprint(matched.key),
+          config.keyRateLimitPerMin,
+        );
+        if (!decision.allowed) {
+          json(
+            res,
+            429,
+            {
+              error: {
+                message: `Rate limit of ${config.keyRateLimitPerMin} requests/min exceeded for key "${matched.label}"`,
+                code: "rate_limited",
+              },
+            },
+            { "Retry-After": String(decision.retryAfterSeconds) },
+          );
           return;
         }
       }
@@ -137,7 +173,7 @@ export function createRequestListener(opts: BridgeServerOptions) {
       }
 
       if (req.method === "POST" && pathname === "/v1/chat/completions") {
-        const raw = await readBody(req);
+        const raw = await readBody(req, config.maxBodyBytes);
         await handleChatCompletions(
           req,
           res,
@@ -151,7 +187,7 @@ export function createRequestListener(opts: BridgeServerOptions) {
       }
 
       if (req.method === "POST" && pathname === "/v1/responses") {
-        const raw = await readBody(req);
+        const raw = await readBody(req, config.maxBodyBytes);
         await handleResponses(
           req,
           res,
@@ -165,7 +201,7 @@ export function createRequestListener(opts: BridgeServerOptions) {
       }
 
       if (req.method === "POST" && pathname === "/v1/messages") {
-        const raw = await readBody(req);
+        const raw = await readBody(req, config.maxBodyBytes);
         await handleAnthropicMessages(
           req,
           res,
@@ -200,6 +236,20 @@ export function createRequestListener(opts: BridgeServerOptions) {
         json(res, 404, { error: { message: "Not found", code: "not_found" } });
       }
     } catch (err) {
+      if (err instanceof BodyTooLargeError) {
+        if (!res.headersSent) {
+          json(res, 413, {
+            error: {
+              message: `${err.message} (CURSOR_BRIDGE_MAX_BODY_BYTES)`,
+              code: "payload_too_large",
+              maxBytes: err.maxBytes,
+            },
+          });
+        } else {
+          res.end();
+        }
+        return;
+      }
       const msg = err instanceof Error ? err.message : String(err);
       console.error(`[${new Date().toISOString()}] Proxy error: ${msg}`);
       if (err instanceof Error && err.stack) {
