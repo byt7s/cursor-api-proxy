@@ -10,6 +10,8 @@ import {
   reportAccountDisabled,
   reportRateLimit,
 } from "./account-pool.js";
+import { AdmissionCapacityError } from "./admission.js";
+import { AcpWorkerBusyError } from "./acp-pool.js";
 
 describe("isRateLimited", () => {
   it("detects common rate-limit stderr patterns", () => {
@@ -160,6 +162,34 @@ describe("runSyncWithAccountFailover", () => {
     expect(outcome.status).toBe("all_disabled");
     expect(runOnce).toHaveBeenCalledTimes(2);
     expect(getAccountStats().every((s) => s.isDisabled)).toBe(true);
+  });
+
+  it("retries next account on AdmissionCapacityError", async () => {
+    initAccountPool(["/a", "/b"]);
+    const runOnce = vi.fn(async (configDir: string | undefined) => {
+      if (configDir === "/a") throw new AdmissionCapacityError(1000);
+      return { code: 0, stdout: "from-b", stderr: "" };
+    });
+
+    const outcome = await runSyncWithAccountFailover(runOnce);
+    expect(outcome.status).toBe("ok");
+    if (outcome.status !== "ok") return;
+    expect(outcome.configDir).toBe("/b");
+    expect(runOnce).toHaveBeenCalledTimes(2);
+  });
+
+  it("retries next account on AcpWorkerBusyError", async () => {
+    initAccountPool(["/a", "/b"]);
+    const runOnce = vi.fn(async (configDir: string | undefined) => {
+      if (configDir === "/a") throw new AcpWorkerBusyError("/a");
+      return { code: 0, stdout: "from-b", stderr: "" };
+    });
+
+    const outcome = await runSyncWithAccountFailover(runOnce);
+    expect(outcome.status).toBe("ok");
+    if (outcome.status !== "ok") return;
+    expect(outcome.configDir).toBe("/b");
+    expect(runOnce).toHaveBeenCalledTimes(2);
   });
 });
 

@@ -2,6 +2,7 @@ import * as http from "node:http";
 import * as https from "node:https";
 import * as fs from "node:fs";
 import { describe, it, expect, vi, afterEach } from "vitest";
+import { getAdmissionConfig } from "./admission.js";
 import { startBridgeServer } from "./server.js";
 import { appendSessionLine } from "./request-log.js";
 import { run, runStreaming } from "./process.js";
@@ -154,14 +155,20 @@ describe("startBridgeServer", () => {
     expect(data.defaultModel).toBe("default");
     expect(data.mode).toBe("ask");
     expect(data.perRequestMode).toBe(true);
+    // Flat keys are ACP back-compat; nested acp/sdk are per-plane snapshots.
     expect(data.admission).toMatchObject({
       maxConcurrentRuns: 16,
       maxConcurrentRunsPerAccount: 2,
       waitMs: expect.any(Number),
       globalInUse: 0,
       waiting: 0,
+      acp: { globalInUse: 0, waiting: 0, perAccount: {} },
+      sdk: { globalInUse: 0, waiting: 0, perAccount: {} },
     });
     expect(data.admission.perAccount).toEqual({});
+    const cfg = getAdmissionConfig();
+    expect(cfg.acp.maxConcurrentRuns).toBe(16);
+    expect(cfg.sdk.maxConcurrentRuns).toBe(48);
   });
 
   it("responds 200 on GET /v1/models", async () => {

@@ -8,6 +8,11 @@ import { runAgentSync, runAgentStream } from "./agent-runner.js";
 import { runAcpStream, runAcpSync } from "./acp-client.js";
 import { writeAccountApiKey, writeApiKeyAccount } from "./account-api-key.js";
 import { shutdownAcpWarmPool } from "./acp-pool.js";
+import {
+  admitAgentRun,
+  configureAdmission,
+  resetAdmissionForTests,
+} from "./admission.js";
 import { writeAccountEngine } from "./execution-engine.js";
 import { runSdkAgent } from "./sdk-executor.js";
 import { readKeychainToken, writeCachedToken } from "./token-cache.js";
@@ -245,5 +250,40 @@ describe("SDK engine path", () => {
     );
     expect(runAcpSync).toHaveBeenCalled();
     expect(runSdkAgent).not.toHaveBeenCalled();
+  });
+
+  it("admits SDK runs on the separate higher-capacity plane", async () => {
+    resetAdmissionForTests();
+    configureAdmission({
+      maxConcurrentRuns: 1,
+      maxConcurrentRunsPerAccount: 1,
+      sdkMaxConcurrentRuns: 2,
+      sdkMaxConcurrentRunsPerAccount: 2,
+      waitMs: 0,
+    });
+    const acpHold = await admitAgentRun("/busy-acp", {
+      plane: "acp",
+      waitMs: 0,
+    });
+    expect(acpHold.ok).toBe(true);
+
+    tmp = fs.mkdtempSync(path.join(os.tmpdir(), "sdk-plane-"));
+    writeAccountApiKey(tmp, "crsr_plane");
+    writeAccountEngine(tmp, "sdk");
+
+    const result = await runAgentSync(
+      config({ useAcp: true, admissionWaitMs: 0 }),
+      "/tmp/ws",
+      true,
+      ["--print", "--model", "composer-2.5"],
+      undefined,
+      "via sdk plane",
+      tmp,
+    );
+    expect(result.stdout).toBe("sdk-ok");
+    expect(runSdkAgent).toHaveBeenCalled();
+
+    if (acpHold.ok) acpHold.release();
+    resetAdmissionForTests();
   });
 });
