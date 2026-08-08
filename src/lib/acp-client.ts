@@ -8,9 +8,23 @@ import * as readline from "node:readline";
 import { spawn } from "node:child_process";
 import { debuglog } from "node:util";
 
+import {
+  configureAcpSessionModel,
+  type AcpAvailableModel,
+  resolveAcpModelConfigValue,
+} from "./acp-model.js";
 import { trackChildProcess } from "./process.js";
 import { DETACH_CHILDREN, killProcessTree } from "./process-tree-kill.js";
-import { toAcpCliModelId } from "./sdk-model-map.js";
+
+export type { AcpAvailableModel } from "./acp-model.js";
+export {
+  AcpModelNotFoundError,
+  MODEL_NOT_FOUND_CODE,
+  configureAcpSessionModel,
+  isModelNotFoundMessage,
+  isSessionDefaultModel,
+  resolveAcpModelConfigValue,
+} from "./acp-model.js";
 
 const debugAcp = debuglog("cursor-api-proxy:acp");
 
@@ -220,54 +234,6 @@ export function handleAcpNotification(
   }
 
   return false;
-}
-
-export type AcpAvailableModel = { modelId: string; name: string };
-
-/**
- * Map OpenAI-style / proxy display name to Cursor ACP `modelId`
- * (e.g. `composer-2` → `composer-2[fast=true]`,
- * `cursor-grok-4.5-high-fast` → `grok-4.5[effort=high,fast=true]`).
- *
- * If `availableModels` is missing or empty, returns the parameterized CLI id
- * when the name is a known alias, otherwise `displayName` unchanged.
- * If the list is non-empty but no row matches, logs via debug and falls back
- * to session default (`default[]`). Duplicate `name` entries: first match wins.
- */
-export function resolveAcpModelConfigValue(
-  displayName: string,
-  availableModels: AcpAvailableModel[] | undefined,
-): string {
-  const parameterized = toAcpCliModelId(displayName);
-  const candidates = Array.from(
-    new Set(
-      [displayName, parameterized].filter(
-        (v): v is string => Boolean(v && v.trim()),
-      ),
-    ),
-  );
-
-  if (!availableModels?.length) {
-    return parameterized ?? displayName;
-  }
-
-  for (const candidate of candidates) {
-    const byName = availableModels.find(
-      (m) => m.name.toLowerCase() === candidate.toLowerCase(),
-    );
-    if (byName) return byName.modelId;
-    const byId = availableModels.find(
-      (m) => m.modelId.toLowerCase() === candidate.toLowerCase(),
-    );
-    if (byId) return byId.modelId;
-  }
-
-  debugAcp(
-    "ACP model: no catalog match for display name %j (tried %j); falling back to default[]",
-    displayName,
-    candidates,
-  );
-  return "default[]";
 }
 
 export function sendAcpRequest(
@@ -486,27 +452,20 @@ export function runAcpSync(
           return;
         }
 
-        if (opts.model) {
-          const resolvedModelId = resolveAcpModelConfigValue(
-            opts.model,
-            sessionResult.models?.availableModels,
-          );
-          if (resolvedModelId !== "default" && resolvedModelId !== "default[]") {
-            debugAcp("ACP step: session/set_config_option (model)");
-            await sendAcpRequest(
-              child.stdin,
+        debugAcp("ACP step: session/set_config_option (model)");
+        await configureAcpSessionModel({
+          model: opts.model,
+          availableModels: sessionResult.models?.availableModels,
+          setModel: (modelId) =>
+            sendAcpRequest(
+              child.stdin!,
               nextId,
               "session/set_config_option",
-              { sessionId, configId: "model", value: resolvedModelId },
+              { sessionId, configId: "model", value: modelId },
               pending,
               requestTimeoutMs,
-            );
-          } else {
-            debugAcp(
-              "ACP step: session/set_config_option (model) — skipped, using session default",
-            );
-          }
-        }
+            ).then(() => undefined),
+        });
 
         debugAcp("ACP step: session/prompt");
         await sendAcpRequest(child.stdin, nextId, "session/prompt", {
@@ -517,9 +476,13 @@ export function runAcpSync(
           debugAcp("ACP sync: no content accumulated; stderr tail: %s", stderr.slice(-500));
         }
         finish(0);
-      } catch {
+      } catch (err) {
         if (timeout) clearTimeout(timeout);
         if (!resolved) {
+          const msg = err instanceof Error ? err.message : String(err);
+          if (msg && !stderr.includes(msg)) {
+            stderr = stderr ? `${stderr}\n${msg}` : msg;
+          }
           finish(1);
         }
       }
@@ -689,27 +652,20 @@ export function runAcpStream(
           return;
         }
 
-        if (opts.model) {
-          const resolvedModelId = resolveAcpModelConfigValue(
-            opts.model,
-            sessionResult.models?.availableModels,
-          );
-          if (resolvedModelId !== "default" && resolvedModelId !== "default[]") {
-            debugAcp("ACP step: session/set_config_option (model)");
-            await sendAcpRequest(
-              child.stdin,
+        debugAcp("ACP step: session/set_config_option (model)");
+        await configureAcpSessionModel({
+          model: opts.model,
+          availableModels: sessionResult.models?.availableModels,
+          setModel: (modelId) =>
+            sendAcpRequest(
+              child.stdin!,
               nextId,
               "session/set_config_option",
-              { sessionId, configId: "model", value: resolvedModelId },
+              { sessionId, configId: "model", value: modelId },
               pending,
               requestTimeoutMs,
-            );
-          } else {
-            debugAcp(
-              "ACP step: session/set_config_option (model) — skipped, using session default",
-            );
-          }
-        }
+            ).then(() => undefined),
+        });
 
         debugAcp("ACP step: session/prompt");
         await sendAcpRequest(child.stdin, nextId, "session/prompt", {
@@ -717,9 +673,13 @@ export function runAcpStream(
           prompt: [{ type: "text", text: prompt }],
         }, pending, requestTimeoutMs);
         finish(0);
-      } catch {
+      } catch (err) {
         if (timeout) clearTimeout(timeout);
         if (!resolved) {
+          const msg = err instanceof Error ? err.message : String(err);
+          if (msg && !stderr.includes(msg)) {
+            stderr = stderr ? `${stderr}\n${msg}` : msg;
+          }
           finish(1);
         }
       }

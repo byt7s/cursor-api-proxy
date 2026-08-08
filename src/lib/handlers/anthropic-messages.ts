@@ -34,6 +34,11 @@ import {
   logTrafficResponse,
   type TrafficMessage,
 } from "../request-log.js";
+import {
+  isModelNotFoundMessage,
+  MODEL_NOT_FOUND_CODE,
+  modelNotFoundPublicMessage,
+} from "../acp-model.js";
 import { resolveRequestModel } from "../resolve-request-model.js";
 import { resolveRequestMode } from "../resolve-mode.js";
 import { resolveWorkspace } from "../workspace.js";
@@ -699,8 +704,16 @@ export async function handleAnthropicMessages(
       outcome.result.code,
       outcome.result.stderr ?? "",
     );
-    json(res, 500, {
-      error: { type: "api_error", message: errMsg, code: "cursor_cli_error" },
+    const modelMissing = isModelNotFoundMessage(outcome.result.stderr);
+    json(res, modelMissing ? 400 : 500, {
+      error: {
+        type: modelMissing ? "invalid_request_error" : "api_error",
+        message: modelMissing
+          ? modelNotFoundPublicMessage(outcome.result.stderr, displayModel)
+          : errMsg,
+        code: modelMissing ? MODEL_NOT_FOUND_CODE : "cursor_cli_error",
+        ...(modelMissing ? { model: displayModel } : {}),
+      },
     });
     return;
   }

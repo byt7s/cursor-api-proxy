@@ -10,7 +10,7 @@ import {
   buildAcpSpawnEnv,
   handleAcpNotification,
   parseAcpStdoutLine,
-  resolveAcpModelConfigValue,
+  configureAcpSessionModel,
   sendAcpRequest,
   type AcpAvailableModel,
   type AcpStreamResult,
@@ -301,27 +301,20 @@ export class AcpProcess {
         };
       }
 
-      if (opts.model) {
-        const resolvedModelId = resolveAcpModelConfigValue(
-          opts.model,
-          sessionResult.models?.availableModels,
-        );
-        if (resolvedModelId !== "default" && resolvedModelId !== "default[]") {
-          debugAcp("ACP step: session/set_config_option (model)");
-          try {
-            await sendAcpRequest(
-              this.child.stdin,
-              this.nextId,
-              "session/set_config_option",
-              { sessionId, configId: "model", value: resolvedModelId },
-              this.pending,
-              requestTimeoutMs,
-            );
-          } catch (err) {
-            debugAcp("ACP set model failed: %s", String(err));
-          }
-        }
-      }
+      debugAcp("ACP step: session/set_config_option (model)");
+      await configureAcpSessionModel({
+        model: opts.model,
+        availableModels: sessionResult.models?.availableModels,
+        setModel: (modelId) =>
+          sendAcpRequest(
+            this.child.stdin!,
+            this.nextId,
+            "session/set_config_option",
+            { sessionId, configId: "model", value: modelId },
+            this.pending,
+            requestTimeoutMs,
+          ).then(() => undefined),
+      });
 
       if (opts.mode && opts.mode !== "agent") {
         debugAcp("ACP step: session/set_config_option (mode)");

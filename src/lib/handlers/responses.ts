@@ -44,6 +44,11 @@ import {
   logTrafficResponse,
   type TrafficMessage,
 } from "../request-log.js";
+import {
+  isModelNotFoundMessage,
+  MODEL_NOT_FOUND_CODE,
+  modelNotFoundPublicMessage,
+} from "../acp-model.js";
 import { resolveRequestModel } from "../resolve-request-model.js";
 import { resolveRequestMode } from "../resolve-mode.js";
 import { sanitizeMessages } from "../sanitize.js";
@@ -766,8 +771,15 @@ export async function handleResponses(
       outcome.result.code,
       outcome.result.stderr ?? "",
     );
-    json(res, 500, {
-      error: { message: errMsg, code: "cursor_cli_error" },
+    const modelMissing = isModelNotFoundMessage(outcome.result.stderr);
+    json(res, modelMissing ? 400 : 500, {
+      error: {
+        message: modelMissing
+          ? modelNotFoundPublicMessage(outcome.result.stderr, displayModel)
+          : errMsg,
+        code: modelMissing ? MODEL_NOT_FOUND_CODE : "cursor_cli_error",
+        ...(modelMissing ? { model: displayModel } : {}),
+      },
     });
     return;
   }

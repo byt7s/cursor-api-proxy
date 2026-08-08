@@ -26,6 +26,11 @@ import {
   type TrafficMessage,
 } from "../request-log.js";
 import { resolveRequestMode } from "../resolve-mode.js";
+import {
+  isModelNotFoundMessage,
+  MODEL_NOT_FOUND_CODE,
+  modelNotFoundPublicMessage,
+} from "../acp-model.js";
 import { resolveRequestModel } from "../resolve-request-model.js";
 import { resolveWorkspace } from "../workspace.js";
 import { buildBridgeContextPreamble, BRIDGE_AGENT_PROMPT_SEPARATOR } from "../bridge-context-preamble.js";
@@ -623,9 +628,16 @@ export async function handleChatCompletions(
             outcome.code,
             outcome.stderr,
           );
+          const modelMissing = isModelNotFoundMessage(outcome.stderr);
           res.write(
             `data: ${JSON.stringify({
-              error: { message: publicMsg, code: "cursor_cli_error" },
+              error: {
+                message: modelMissing
+                  ? modelNotFoundPublicMessage(outcome.stderr, displayModel)
+                  : publicMsg,
+                code: modelMissing ? MODEL_NOT_FOUND_CODE : "cursor_cli_error",
+                ...(modelMissing ? { model: displayModel } : {}),
+              },
             })}\n\n`,
           );
           res.write("data: [DONE]\n\n");
@@ -835,11 +847,14 @@ export async function handleChatCompletions(
         latency.mark("shape_done");
         logLatency(config, latency, { ok: false, model: displayModel });
         if (!headersWritten) {
-          json(res, 500, {
+          const modelMissing = isModelNotFoundMessage(outcome.stderr);
+          json(res, modelMissing ? 400 : 500, {
             error: {
-              message:
-                "The Cursor agent process failed. See server logs for details.",
-              code: "cursor_cli_error",
+              message: modelMissing
+                ? modelNotFoundPublicMessage(outcome.stderr, displayModel)
+                : "The Cursor agent process failed. See server logs for details.",
+              code: modelMissing ? MODEL_NOT_FOUND_CODE : "cursor_cli_error",
+              ...(modelMissing ? { model: displayModel } : {}),
             },
           });
         } else {
@@ -993,11 +1008,18 @@ export async function handleChatCompletions(
     );
     latency.mark("shape_done");
     logLatency(config, latency, { ok: false, model: displayModel });
+    const modelMissing = isModelNotFoundMessage(outcome.result.stderr);
     json(
       res,
-      500,
+      modelMissing ? 400 : 500,
       {
-        error: { message: errMsg, code: "cursor_cli_error" },
+        error: {
+          message: modelMissing
+            ? modelNotFoundPublicMessage(outcome.result.stderr, displayModel)
+            : errMsg,
+          code: modelMissing ? MODEL_NOT_FOUND_CODE : "cursor_cli_error",
+          ...(modelMissing ? { model: displayModel } : {}),
+        },
       },
       config.latencyWaterfall
         ? { "X-Cursor-Proxy-Waterfall": latency.headerValue() }
