@@ -1,6 +1,11 @@
+import * as fs from "node:fs";
+import * as os from "node:os";
+import * as path from "node:path";
 import { describe, it, expect, beforeEach, vi, afterEach } from "vitest";
+import { writeAccountAllowedModels } from "./account-models.js";
 import {
   AccountPool,
+  anyAccountAllowsModel,
   initAccountPool,
   getNextAccountConfigDir,
   reportRequestStart,
@@ -249,5 +254,37 @@ describe("Global account pool functions", () => {
     initAccountPool(["/new1"]);
     expect(getNextAccountConfigDir()).toBe("/new1");
     expect(getNextAccountConfigDir()).toBe("/new1");
+  });
+});
+
+describe("AccountPool model allowlists", () => {
+  let a: string;
+  let b: string;
+
+  beforeEach(() => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), "pool-models-"));
+    a = path.join(root, "a");
+    b = path.join(root, "b");
+    fs.mkdirSync(a, { recursive: true });
+    fs.mkdirSync(b, { recursive: true });
+    writeAccountAllowedModels(a, ["composer-2"]);
+    writeAccountAllowedModels(b, ["sonnet-4.6"]);
+  });
+
+  afterEach(() => {
+    fs.rmSync(path.dirname(a), { recursive: true, force: true });
+  });
+
+  it("skips accounts that do not allow the required model", () => {
+    const pool = new AccountPool([a, b]);
+    expect(pool.getNextConfigDir({ requiredModel: "composer-2" })).toBe(a);
+    expect(pool.getNextConfigDir({ requiredModel: "sonnet-4.6" })).toBe(b);
+    expect(pool.getNextConfigDir({ requiredModel: "opus-4.6" })).toBeUndefined();
+  });
+
+  it("reports whether any pooled account allows a model", () => {
+    initAccountPool([a, b]);
+    expect(anyAccountAllowsModel("composer-2")).toBe(true);
+    expect(anyAccountAllowsModel("opus-4.6")).toBe(false);
   });
 });
