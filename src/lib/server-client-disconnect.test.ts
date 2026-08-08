@@ -64,6 +64,7 @@ function createTestConfig(
     admissionWaitMs: 0,
     latencyWaterfall: true,
     thoughtMode: "drop",
+    toolCalls: false,
     ...overrides,
   };
 }

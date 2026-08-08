@@ -49,6 +49,14 @@ import {
   thoughtStreamDelta,
   withReasoningContent,
 } from "../thought-mode.js";
+import {
+  buildBufferedStreamChunks,
+  buildToolBridgeSystemText,
+  containsToolCallCandidate,
+  parseToolCallOutput,
+  resolveAssistantOutput,
+  shouldUseToolBridge,
+} from "../tool-calls.js";
 
 function logLatency(
   config: BridgeConfig,
@@ -103,7 +111,13 @@ export async function handleChatCompletions(
 
   const cleanMessages = sanitizeMessages(body.messages ?? []);
 
-  const toolsText = toolsToSystemText(body.tools, body.functions);
+  const toolBridgeActive =
+    config.toolCalls && shouldUseToolBridge(body.tools, body.tool_choice);
+  const toolsText = config.toolCalls
+    ? toolBridgeActive
+      ? buildToolBridgeSystemText(body.tools, body.tool_choice)
+      : undefined
+    : toolsToSystemText(body.tools, body.functions);
   const messagesWithTools = toolsText
     ? [{ role: "system", content: toolsText }, ...cleanMessages]
     : cleanMessages;
@@ -249,6 +263,19 @@ export async function handleChatCompletions(
       );
     };
 
+    const usageFor = (promptText: string, completionText: string) => {
+      const promptTokens = Math.max(1, Math.round(promptText.length / 4));
+      const completionTokens = Math.max(
+        1,
+        Math.round(completionText.length / 4),
+      );
+      return {
+        prompt_tokens: promptTokens,
+        completion_tokens: completionTokens,
+        total_tokens: promptTokens + completionTokens,
+      };
+    };
+
     const finishChatStream = (accumulated: string) => {
       if (!latency.has("model_complete")) latency.mark("model_complete");
       logTrafficResponse(
@@ -257,8 +284,7 @@ export async function handleChatCompletions(
         accumulated,
         true,
       );
-      const promptTokens = Math.max(1, Math.round(agentPrompt.length / 4));
-      const completionTokens = Math.max(1, Math.round(accumulated.length / 4));
+      const usage = usageFor(agentPrompt, accumulated);
       res.write(
         `data: ${JSON.stringify({
           id,
@@ -266,11 +292,7 @@ export async function handleChatCompletions(
           created,
           model: displayModel,
           choices: [{ index: 0, delta: {}, finish_reason: "stop" }],
-          usage: {
-            prompt_tokens: promptTokens,
-            completion_tokens: completionTokens,
-            total_tokens: promptTokens + completionTokens,
-          },
+          usage,
         })}\n\n`,
       );
       res.write("data: [DONE]\n\n");
@@ -278,8 +300,63 @@ export async function handleChatCompletions(
       logLatency(config, latency, { ok: true, model: displayModel });
     };
 
+    const finishBufferedToolStream = (
+      accumulated: string,
+      accumulatedThought: string,
+    ) => {
+      if (!latency.has("model_complete")) latency.mark("model_complete");
+      logTrafficResponse(
+        config.verbose,
+        model ?? cursorModel,
+        accumulated,
+        true,
+      );
+      if (
+        containsToolCallCandidate(accumulated) &&
+        !parseToolCallOutput(accumulated, body.tools, {
+          toolChoice: body.tool_choice,
+        })
+      ) {
+        console.warn(
+          `[tool-calls] rejected model tool output for ${displayModel ?? "default"}`,
+        );
+      }
+      const buffered = buildBufferedStreamChunks({
+        id,
+        created,
+        model: displayModel,
+        text: accumulated,
+        tools: body.tools,
+        usage: usageFor(agentPrompt, accumulated),
+        options: { toolChoice: body.tool_choice },
+      });
+      const reasoningDelta = thoughtStreamDelta(
+        accumulatedThought,
+        config.thoughtMode,
+      );
+      if (reasoningDelta) {
+        buffered.unshift({
+          id,
+          object: "chat.completion.chunk",
+          created,
+          model: displayModel,
+          choices: [
+            { index: 0, delta: reasoningDelta, finish_reason: null },
+          ],
+        });
+      }
+      ensureHeaders();
+      for (const chunk of buffered) {
+        res.write(`data: ${JSON.stringify(chunk)}\n\n`);
+      }
+      res.write("data: [DONE]\n\n");
+      latency.mark("shape_done");
+      logLatency(config, latency, { ok: true, model: displayModel });
+    };
+
     if (config.useAcp && typeof promptForAgent === "string") {
       let accumulated = "";
+      let accumulatedThought = "";
       try {
         latency.mark("account_select_end");
         latency.mark("spawn_start");
@@ -288,9 +365,10 @@ export async function handleChatCompletions(
           onCommit: ensureHeaders,
           onChunk: (chunk) => {
             accumulated += chunk;
-            writeChatChunk(chunk);
+            if (!toolBridgeActive) writeChatChunk(chunk);
+            else markModelFirstByte(latency);
           },
-          ...(config.thoughtMode === "reasoning"
+          ...(!toolBridgeActive && config.thoughtMode === "reasoning"
             ? {
                 onThought: (chunk: string) => {
                   const delta = thoughtStreamDelta(chunk, "reasoning");
@@ -318,7 +396,11 @@ export async function handleChatCompletions(
               promptForAgent,
               configDir,
               abortController.signal,
-              onThought,
+              toolBridgeActive
+                ? (t) => {
+                    accumulatedThought += t;
+                  }
+                : onThought,
             ),
         });
 
@@ -408,8 +490,12 @@ export async function handleChatCompletions(
           return;
         }
 
-        ensureHeaders();
-        finishChatStream(accumulated);
+        if (toolBridgeActive) {
+          finishBufferedToolStream(accumulated, accumulatedThought);
+        } else {
+          ensureHeaders();
+          finishChatStream(accumulated);
+        }
         logAccountStats(config.verbose, getAccountStats());
         res.end();
       } catch (err) {
@@ -462,7 +548,8 @@ export async function handleChatCompletions(
         onCommit: ensureHeaders,
         onChunk: (text) => {
           accumulated += text;
-          writeChatChunk(text);
+          if (!toolBridgeActive) writeChatChunk(text);
+          else markModelFirstByte(latency);
         },
         runOnce: (configDir, onChunk) => {
           const parseLine = createStreamParser(onChunk, () => {
@@ -553,8 +640,12 @@ export async function handleChatCompletions(
         return;
       }
 
-      ensureHeaders();
-      finishChatStream(accumulated);
+      if (toolBridgeActive) {
+        finishBufferedToolStream(accumulated, "");
+      } else {
+        ensureHeaders();
+        finishChatStream(accumulated);
+      }
       logAccountStats(config.verbose, getAccountStats());
       res.end();
     } catch (err) {
@@ -672,11 +763,31 @@ export async function handleChatCompletions(
   const promptTokens = Math.max(1, Math.round(agentPrompt.length / 4));
   const completionTokens = Math.max(1, Math.round(content.length / 4));
   const totalTokens = promptTokens + completionTokens;
+  const resolved = toolBridgeActive
+    ? resolveAssistantOutput(content, body.tools, {
+        toolChoice: body.tool_choice,
+      })
+    : { kind: "text" as const, content };
+  if (
+    toolBridgeActive &&
+    resolved.kind === "text" &&
+    containsToolCallCandidate(content)
+  ) {
+    console.warn(
+      `[tool-calls] rejected model tool output for ${displayModel ?? "default"}`,
+    );
+  }
+  const baseMessage =
+    resolved.kind === "tool_call"
+      ? { role: "assistant" as const, content: null, tool_calls: [resolved.toolCall] }
+      : { role: "assistant" as const, content: resolved.content };
   const message = withReasoningContent(
-    { role: "assistant", content },
+    baseMessage,
     outcome.result.reasoning,
     config.thoughtMode,
   );
+  const finishReason =
+    resolved.kind === "tool_call" ? "tool_calls" : "stop";
 
   latency.mark("shape_done");
   logLatency(config, latency, { ok: true, model: displayModel });
@@ -699,7 +810,7 @@ export async function handleChatCompletions(
         {
           index: 0,
           message,
-          finish_reason: "stop",
+          finish_reason: finishReason,
         },
       ],
       usage: {

@@ -80,6 +80,11 @@ export type LoadedEnv = {
    * See CURSOR_BRIDGE_THOUGHT_MODE.
    */
   thoughtMode: "drop" | "reasoning";
+  /**
+   * When true, parse model tool-call JSON into OpenAI message.tool_calls.
+   * Default false (safe). See CURSOR_BRIDGE_TOOL_CALLS.
+   */
+  toolCalls: boolean;
 };
 
 export type AgentCommand = {
@@ -441,6 +446,7 @@ export function loadEnvConfig(opts: EnvOptions = {}): LoadedEnv {
     ),
     latencyWaterfall: envBool(env, ["CURSOR_BRIDGE_LATENCY_WATERFALL"], true),
     thoughtMode: envThoughtMode(env, ["CURSOR_BRIDGE_THOUGHT_MODE"], "drop"),
+    toolCalls: envBool(env, ["CURSOR_BRIDGE_TOOL_CALLS"], false),
   };
 }
 

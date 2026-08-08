@@ -86,6 +86,8 @@ export type BridgeConfig = {
    * drop (default) or map to OpenAI reasoning_content.
    */
   thoughtMode: "drop" | "reasoning";
+  /** Bridge textual tool output to OpenAI tool_calls (CURSOR_BRIDGE_TOOL_CALLS). */
+  toolCalls: boolean;
 };
 
 export function loadBridgeConfig(opts: EnvOptions = {}): BridgeConfig {
@@ -148,5 +150,6 @@ export function loadBridgeConfig(opts: EnvOptions = {}): BridgeConfig {
     admissionWaitMs: env.admissionWaitMs,
     latencyWaterfall: env.latencyWaterfall,
     thoughtMode: env.thoughtMode,
+    toolCalls: env.toolCalls,
   };
 }
