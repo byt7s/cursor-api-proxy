@@ -2,6 +2,7 @@ import * as fs from "node:fs";
 import * as path from "node:path";
 
 import type { AccountStat } from "./account-pool.js";
+import { publishDashboardEvent } from "./event-bus.js";
 import type { ModelResolutionDecision } from "./model-map.js";
 
 export function logIncoming(
@@ -193,6 +194,10 @@ export function appendSessionLine(
       fs.mkdirSync(dir, { recursive: true });
     }
     fs.appendFileSync(logPath, line);
+    publishDashboardEvent({
+      type: "log",
+      data: { line: line.replace(/\n$/, "") },
+    });
   } catch (err) {
     console.error("Failed to write sessions log:", err);
   }

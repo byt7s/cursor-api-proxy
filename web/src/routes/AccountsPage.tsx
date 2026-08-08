@@ -19,7 +19,13 @@ import {
   Table,
   type TableColumn,
 } from "../design-system";
-import { useApiResource, useAsyncAction, usePolling, useSettings } from "../hooks";
+import {
+  useApiResource,
+  useAsyncAction,
+  useDashboardEvents,
+  usePolling,
+  useSettings,
+} from "../hooks";
 import { api } from "../lib/api";
 import { formatDash, shortenAccountDir } from "../lib/format";
 import type { AccountReport, AccountsReport } from "../lib/types";
@@ -63,9 +69,18 @@ export function AccountsPage() {
   const [formError, setFormError] = useState<string | null>(null);
   const [removing, setRemoving] = useState<string | null>(null);
 
-  usePolling(() => {
-    void accounts.reload();
-  }, poll.accountsMs);
+  const eventsMode = useDashboardEvents({
+    onAccounts: () => {
+      void accounts.reload();
+    },
+  });
+  usePolling(
+    () => {
+      void accounts.reload();
+    },
+    poll.accountsMs,
+    eventsMode !== "sse",
+  );
 
   async function onAdd(event: FormEvent): Promise<void> {
     event.preventDefault();

@@ -2,6 +2,14 @@ export { useApiResource } from "./useApiResource";
 export type { ApiResource, AsyncState } from "./useApiResource";
 export { useAsyncAction } from "./useAsyncAction";
 export { DashboardKeyProvider, useDashboardKey } from "./useDashboardKey";
+export {
+  DashboardEventsProvider,
+  useDashboardEvents,
+} from "./useDashboardEvents";
+export type {
+  DashboardEventsMode,
+  DashboardSseHandlers,
+} from "./useDashboardEvents";
 export { usePolling } from "./usePolling";
 export {
   DEFAULT_POLL_SETTINGS,

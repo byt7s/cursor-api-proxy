@@ -14,7 +14,13 @@ import {
   Stack,
   Switch,
 } from "../design-system";
-import { useApiResource, useAsyncAction, usePolling, useSettings } from "../hooks";
+import {
+  useApiResource,
+  useAsyncAction,
+  useDashboardEvents,
+  usePolling,
+  useSettings,
+} from "../hooks";
 import { api } from "../lib/api";
 import type { LogPayload } from "../lib/types";
 
@@ -41,12 +47,21 @@ export function LogsPage() {
   const log = useApiResource<LogPayload>(() => api.log(lines), [lines]);
   const { pending, run } = useAsyncAction();
 
+  const eventsMode = useDashboardEvents(
+    {
+      onLog: () => {
+        void log.reload();
+      },
+    },
+    !paused,
+  );
+  // Keep interval controls for pause / fallback when SSE is unavailable.
   usePolling(
     () => {
       void log.reload();
     },
     poll.logMs,
-    !paused,
+    !paused && eventsMode !== "sse",
   );
 
   async function onClear(): Promise<void> {

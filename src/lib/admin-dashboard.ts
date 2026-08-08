@@ -29,7 +29,11 @@ import {
   type AuthorizeResult,
 } from "./dashboard-auth.js";
 import { runDoctor } from "./doctor.js";
-import { BodyTooLargeError } from "./http.js";
+import {
+  publishDashboardEvent,
+  subscribeDashboardEvents,
+} from "./event-bus.js";
+import { BodyTooLargeError, writeSseHeaders } from "./http.js";
 import { recentRequestRecords } from "./request-record.js";
 import {
   computeSessionStats,
@@ -454,7 +458,8 @@ export function handleAdminDashboard(
       pathname === "/api/accounts" ||
       pathname === "/api/doctor" ||
       pathname === "/api/audit" ||
-      pathname === "/api/requests");
+      pathname === "/api/requests" ||
+      pathname === "/api/events");
 
   const isMutating =
     req.method === "POST" || req.method === "PUT" || req.method === "DELETE";
@@ -497,6 +502,29 @@ export function handleAdminDashboard(
   }
 
   if (auth && !auth.ok) return json(res, auth.status, { error: auth.error });
+
+  if (req.method === "GET" && pathname === "/api/events") {
+    writeSseHeaders(res);
+    const send = (type: string, data: Record<string, unknown> = {}) => {
+      if (res.writableEnded) return;
+      res.write(`event: ${type}\ndata: ${JSON.stringify(data)}\n\n`);
+    };
+    // Initial nudge so clients can sync without waiting for the next mutation.
+    send("status", {});
+    const unsubscribe = subscribeDashboardEvents((event) => {
+      send(event.type, event.data ?? {});
+    });
+    const heartbeat = setInterval(() => {
+      if (!res.writableEnded) res.write(": heartbeat\n\n");
+    }, 15_000);
+    const cleanup = () => {
+      clearInterval(heartbeat);
+      unsubscribe();
+    };
+    req.on("close", cleanup);
+    res.on("close", cleanup);
+    return;
+  }
 
   if (req.method === "GET" && pathname === "/api/config") {
     return json(res, 200, sanitizedBridgeConfig(config, auth));
@@ -624,6 +652,7 @@ export function handleAdminDashboard(
       }
       try {
         const saved = saveApiKeyAccount(name, apiKey);
+        publishDashboardEvent({ type: "accounts" });
         // Never echo the raw key.
         return json(res, 201, {
           ok: true,
@@ -640,6 +669,7 @@ export function handleAdminDashboard(
     const name = decodeURIComponent(pathname.slice("/api/accounts/".length));
     try {
       removeAccountDir(name);
+      publishDashboardEvent({ type: "accounts" });
       return json(res, 200, { ok: true, name });
     } catch (e) {
       const msg = e instanceof Error ? e.message : String(e);
@@ -655,6 +685,7 @@ export function handleAdminDashboard(
       const apiKey = String(body.apiKey ?? "").trim();
       try {
         setAccountKey(name, apiKey);
+        publishDashboardEvent({ type: "accounts" });
         return json(res, 200, { ok: true, name });
       } catch (e) {
         const msg = e instanceof Error ? e.message : String(e);

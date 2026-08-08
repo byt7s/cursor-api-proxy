@@ -19,6 +19,7 @@ import {
 import {
   useApiResource,
   useAsyncAction,
+  useDashboardEvents,
   usePolling,
   useSettings,
   useStatus,
@@ -65,9 +66,21 @@ export function OverviewPage() {
   const config = useApiResource<ProxyConfig>(() => api.config());
   const accounts = useApiResource<AccountsReport>(() => api.accounts());
 
-  usePolling(() => {
-    void stats.reload();
-  }, poll.requestsMs);
+  const eventsMode = useDashboardEvents({
+    onStats: () => {
+      void stats.reload();
+    },
+    onAccounts: () => {
+      void accounts.reload();
+    },
+  });
+  usePolling(
+    () => {
+      void stats.reload();
+    },
+    poll.requestsMs,
+    eventsMode !== "sse",
+  );
 
   const total = stats.data?.total ?? 0;
   const errors = stats.data?.errors ?? 0;

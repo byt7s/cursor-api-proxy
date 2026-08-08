@@ -136,7 +136,7 @@ The plist label is **`com.cursor-api-proxy`**. Use **`cursor-api-proxy disable`*
 
 - `GET /` and `GET /wiki` both serve `public/dashboard/index.html`; `GET /static/*` serves `public/*`, so bundles resolve at `/static/dashboard/assets/…` (always open)
 - `GET /api/status`, `GET /api/log`, `GET /api/stats`, `GET /api/wiki`
-- Sensitive reads: `GET /api/config`, `GET /api/config/file`, `GET /api/accounts`, `GET /api/doctor`, `GET /api/requests?limit=`, `GET /api/audit?limit=`
+- Sensitive reads: `GET /api/config`, `GET /api/config/file`, `GET /api/accounts`, `GET /api/doctor`, `GET /api/requests?limit=`, `GET /api/audit?limit=`, `GET /api/events` (SSE: `status` / `stats` / `request` / `log` / `accounts` events plus `: heartbeat` comments every ~15s; Overview/Requests/Logs/Accounts prefer this stream and fall back to polling)
 - **Dashboard auth gate** (same for sensitive reads, mutations and `/metrics`), in precedence order:
   1. an `admin`-scoped key from `CURSOR_BRIDGE_API_KEYS` — always accepted
   2. `CURSOR_BRIDGE_DASHBOARD_KEY` when set — then nothing else opens the dashboard
