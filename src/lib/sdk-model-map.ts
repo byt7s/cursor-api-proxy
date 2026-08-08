@@ -54,3 +54,34 @@ export function resolveSdkModel(
   if (!key) return undefined;
   return byCliModel.get(key) ?? { id: key };
 }
+
+/**
+ * Format an SDK selection as a Cursor CLI/ACP model id, e.g.
+ * `grok-4.5[effort=high,fast=true]`.
+ */
+export function formatParameterizedCliModel(
+  selection: SdkModelSelection,
+): string {
+  if (!selection.params?.length) return selection.id;
+  const body = selection.params.map((p) => `${p.id}=${p.value}`).join(",");
+  return `${selection.id}[${body}]`;
+}
+
+/**
+ * Map flat proxy aliases (`cursor-grok-4.5-high-fast`, `composer-2-fast`) to the
+ * parameterized id ACP/CLI catalogs expect. Returns undefined when the input is
+ * empty; unknown ids are returned unchanged.
+ */
+export function toAcpCliModelId(
+  cursorModel: string | undefined,
+): string | undefined {
+  const trimmed = cursorModel?.trim();
+  if (!trimmed) return undefined;
+  const selection = resolveSdkModel(trimmed);
+  if (!selection) return undefined;
+  // Only rewrite when we have an explicit alias entry (params present or
+  // composer map hit). Unknown passthrough stays as the original casing.
+  const key = trimmed.toLowerCase();
+  if (!byCliModel.has(key)) return trimmed;
+  return formatParameterizedCliModel(selection);
+}

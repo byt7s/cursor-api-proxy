@@ -10,6 +10,7 @@ import { debuglog } from "node:util";
 
 import { trackChildProcess } from "./process.js";
 import { DETACH_CHILDREN, killProcessTree } from "./process-tree-kill.js";
+import { toAcpCliModelId } from "./sdk-model-map.js";
 
 const debugAcp = debuglog("cursor-api-proxy:acp");
 
@@ -224,25 +225,49 @@ export function handleAcpNotification(
 export type AcpAvailableModel = { modelId: string; name: string };
 
 /**
- * Map OpenAI-style display name to Cursor ACP `modelId` (e.g. `composer-2` → `composer-2[fast=true]`).
- * If `availableModels` is missing or empty, returns `displayName` unchanged.
- * If the list is non-empty but no row matches `name`, logs via debug and falls back to session default.
- * Duplicate `name` entries: first match wins.
+ * Map OpenAI-style / proxy display name to Cursor ACP `modelId`
+ * (e.g. `composer-2` → `composer-2[fast=true]`,
+ * `cursor-grok-4.5-high-fast` → `grok-4.5[effort=high,fast=true]`).
+ *
+ * If `availableModels` is missing or empty, returns the parameterized CLI id
+ * when the name is a known alias, otherwise `displayName` unchanged.
+ * If the list is non-empty but no row matches, logs via debug and falls back
+ * to session default (`default[]`). Duplicate `name` entries: first match wins.
  */
 export function resolveAcpModelConfigValue(
   displayName: string,
   availableModels: AcpAvailableModel[] | undefined,
 ): string {
-  if (!availableModels?.length) return displayName;
-  const hit = availableModels.find((m) => m.name === displayName);
-  if (!hit) {
-    debugAcp(
-      "ACP model: no catalog match for display name %j; falling back to default[]",
-      displayName,
-    );
-    return "default[]";
+  const parameterized = toAcpCliModelId(displayName);
+  const candidates = Array.from(
+    new Set(
+      [displayName, parameterized].filter(
+        (v): v is string => Boolean(v && v.trim()),
+      ),
+    ),
+  );
+
+  if (!availableModels?.length) {
+    return parameterized ?? displayName;
   }
-  return hit.modelId;
+
+  for (const candidate of candidates) {
+    const byName = availableModels.find(
+      (m) => m.name.toLowerCase() === candidate.toLowerCase(),
+    );
+    if (byName) return byName.modelId;
+    const byId = availableModels.find(
+      (m) => m.modelId.toLowerCase() === candidate.toLowerCase(),
+    );
+    if (byId) return byId.modelId;
+  }
+
+  debugAcp(
+    "ACP model: no catalog match for display name %j (tried %j); falling back to default[]",
+    displayName,
+    candidates,
+  );
+  return "default[]";
 }
 
 export function sendAcpRequest(
