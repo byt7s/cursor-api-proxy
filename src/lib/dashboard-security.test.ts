@@ -107,6 +107,7 @@ function createTestConfig(overrides: Partial<BridgeConfig> = {}): BridgeConfig {
     thoughtMode: "drop",
     toolCalls: false,
     modelAliases: {},
+    ignoreImages: false,
     ...overrides,
   };
 }

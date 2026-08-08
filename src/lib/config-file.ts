@@ -68,6 +68,7 @@ export const CONFIG_FILE_KEYS: ConfigFileKeySpec[] = [
   { key: "force", env: "CURSOR_BRIDGE_FORCE", type: "boolean", group: "Models", label: "Force", editable: true },
   { key: "thoughtMode", env: "CURSOR_BRIDGE_THOUGHT_MODE", type: "enum", values: ["drop", "reasoning"], group: "Models", label: "Thought channel", editable: true },
   { key: "toolCalls", env: "CURSOR_BRIDGE_TOOL_CALLS", type: "boolean", group: "Models", label: "Bridge tool calls", editable: true },
+  { key: "ignoreImages", env: "CURSOR_BRIDGE_IGNORE_IMAGES", type: "boolean", group: "Models", label: "Ignore image parts", editable: true },
 
   { key: "workspace", env: "CURSOR_BRIDGE_WORKSPACE", type: "string", group: "Workspace", label: "Workspace root", editable: true },
   { key: "chatOnlyWorkspace", env: "CURSOR_BRIDGE_CHAT_ONLY_WORKSPACE", type: "boolean", group: "Workspace", label: "Chat-only workspace", editable: true },

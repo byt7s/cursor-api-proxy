@@ -58,20 +58,89 @@ export function normalizeToolDefinitions(tools: unknown): ToolDefinition[] {
 
   const byName = new Map<string, ToolDefinition>();
   for (const entry of tools) {
-    if (!isRecord(entry) || entry.type !== "function") continue;
-    const fn = entry.function;
-    if (!isRecord(fn)) continue;
+    if (!isRecord(entry)) continue;
 
-    const name = typeof fn.name === "string" ? fn.name.trim() : "";
-    if (!name || byName.has(name)) continue;
-    byName.set(name, {
-      name,
-      description:
-        typeof fn.description === "string" ? fn.description : undefined,
-      parameters: fn.parameters,
-    });
+    // OpenAI: { type: "function", function: { name, description, parameters } }
+    if (entry.type === "function") {
+      const fn = entry.function;
+      if (!isRecord(fn)) continue;
+      const name = typeof fn.name === "string" ? fn.name.trim() : "";
+      if (!name || byName.has(name)) continue;
+      byName.set(name, {
+        name,
+        description:
+          typeof fn.description === "string" ? fn.description : undefined,
+        parameters: fn.parameters,
+      });
+      continue;
+    }
+
+    // Anthropic: { name, description, input_schema }
+    if (typeof entry.name === "string" && entry.name.trim()) {
+      const name = entry.name.trim();
+      if (byName.has(name)) continue;
+      byName.set(name, {
+        name,
+        description:
+          typeof entry.description === "string" ? entry.description : undefined,
+        parameters: entry.input_schema ?? entry.parameters,
+      });
+    }
   }
   return [...byName.values()];
+}
+
+export type AnthropicToolUseBlock = {
+  type: "tool_use";
+  id: string;
+  name: string;
+  input: Record<string, unknown>;
+};
+
+export type ResolvedAnthropicAssistantOutput =
+  | {
+      kind: "tool_use";
+      content: AnthropicToolUseBlock[];
+      stop_reason: "tool_use";
+    }
+  | { kind: "text"; content: string; stop_reason: "end_turn" };
+
+/**
+ * Shape model text as Anthropic `tool_use` content blocks when the tool bridge
+ * is active (same JSON contract as the OpenAI path).
+ */
+export function resolveAnthropicAssistantOutput(
+  text: string,
+  tools: unknown,
+  options: ResolveAssistantOutputOptions = {},
+): ResolvedAnthropicAssistantOutput {
+  const resolved = resolveAssistantOutput(text, tools, options);
+  if (resolved.kind === "text") {
+    return {
+      kind: "text",
+      content: resolved.content,
+      stop_reason: "end_turn",
+    };
+  }
+  let input: Record<string, unknown> = {};
+  try {
+    const parsed = JSON.parse(resolved.toolCall.function.arguments) as unknown;
+    if (isRecord(parsed)) input = parsed;
+  } catch {
+    input = {};
+  }
+  return {
+    kind: "tool_use",
+    content: [
+      {
+        type: "tool_use",
+        id: resolved.toolCall.id.replace(/^call_/, "toolu_"),
+        name: resolved.toolCall.function.name,
+        input,
+      },
+    ],
+    stop_reason: "tool_use",
+  };
 }
 
 function isToolChoiceNone(toolChoice: unknown): boolean {

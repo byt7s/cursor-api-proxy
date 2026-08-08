@@ -77,6 +77,7 @@ function createTestConfig(overrides: Partial<BridgeConfig> = {}): BridgeConfig {
     bridgePackageVersion: "0.0.0-test",
     toolCalls: true,
     modelAliases: {},
+    ignoreImages: false,
     defaultEngine: "acp",
     sdkMaxConcurrentRuns: 48,
     sdkMaxConcurrentRunsPerAccount: 12,

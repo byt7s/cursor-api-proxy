@@ -29,6 +29,12 @@ import { resolveRequestMode } from "../resolve-mode.js";
 import { resolveRequestModel } from "../resolve-request-model.js";
 import { resolveWorkspace } from "../workspace.js";
 import { buildBridgeContextPreamble, BRIDGE_AGENT_PROMPT_SEPARATOR } from "../bridge-context-preamble.js";
+import {
+  IMAGES_NOT_SUPPORTED_CODE,
+  IMAGES_NOT_SUPPORTED_MESSAGE,
+  messagesContainImages,
+  stripImagesFromMessages,
+} from "../image-content.js";
 import { sanitizeMessages } from "../sanitize.js";
 import { getAccountStats } from "../account-pool.js";
 import {
@@ -144,7 +150,23 @@ export async function handleChatCompletions(
   const { cursorModel, displayModel, decision } = modelResolution;
   logModelResolution(config.verbose, decision);
 
-  const cleanMessages = sanitizeMessages(body.messages ?? []);
+  let cleanMessages = sanitizeMessages(body.messages ?? []);
+  if (messagesContainImages(cleanMessages)) {
+    if (!config.ignoreImages) {
+      json(res, 400, {
+        error: {
+          message: IMAGES_NOT_SUPPORTED_MESSAGE,
+          code: IMAGES_NOT_SUPPORTED_CODE,
+        },
+      });
+      return;
+    }
+    console.warn(
+      "[images] stripping image parts (CURSOR_BRIDGE_IGNORE_IMAGES=true)",
+    );
+    res.setHeader("X-Cursor-Proxy-Images-Ignored", "true");
+    cleanMessages = stripImagesFromMessages(cleanMessages);
+  }
 
   const toolBridgeActive =
     config.toolCalls && shouldUseToolBridge(body.tools, body.tool_choice);

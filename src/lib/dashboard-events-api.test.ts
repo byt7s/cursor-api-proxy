@@ -33,6 +33,7 @@ function createTestConfig(overrides: Partial<BridgeConfig> = {}): BridgeConfig {
     host: "127.0.0.1",
     port: 0,
     defaultModel: "default",
+    modelAliases: {},
     mode: "ask",
     force: false,
     approveMcps: false,

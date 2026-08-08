@@ -128,6 +128,9 @@ The plist label is **`com.cursor-api-proxy`**. Use **`cursor-api-proxy disable`*
 **LLM / health / accounts**
 
 - `GET /health`, `GET /healthz`, `GET /v1/models`
+- `GET`/`POST /v1/embeddings` → **501** `{ code: "embeddings_not_supported" }` (explicit probe stub)
+- Image parts on chat/messages/responses → **400** `images_not_supported` unless `CURSOR_BRIDGE_IGNORE_IMAGES=true`
+- Anthropic `/v1/messages` with `CURSOR_BRIDGE_TOOL_CALLS=true` returns native `tool_use` blocks (accepts `tool_result` on follow-ups)
 - `GET /metrics` — Prometheus text format (`text/plain; version=0.0.4`). Same gate as the dashboard's sensitive reads (admin-scoped key → `CURSOR_BRIDGE_DASHBOARD_KEY` → `CURSOR_BRIDGE_API_KEY` → loopback-only), **404** when `CURSOR_BRIDGE_METRICS_ENABLED=false`. Exposes `cursor_proxy_requests_total`, `cursor_proxy_request_duration_seconds`, `cursor_proxy_span_duration_seconds` (latency waterfall), `cursor_proxy_admission_in_use` / `_limit`, `cursor_proxy_account_state`, `cursor_proxy_failover_total`, `cursor_proxy_rate_limited_total`, `cursor_proxy_build_info`
 - `GET /accounts` — JSON account pool listing (same data as `cursor-api-proxy accounts`; dashboard table uses `/api/accounts`)
 - `POST /v1/chat/completions`, `POST /v1/responses`, `POST /v1/messages`

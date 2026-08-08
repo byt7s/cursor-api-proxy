@@ -76,6 +76,7 @@ function createTestConfig(overrides: Partial<BridgeConfig> = {}): BridgeConfig {
     thoughtMode: "drop",
     toolCalls: false,
     modelAliases: {},
+    ignoreImages: false,
     maxConcurrentRuns: 16,
     maxConcurrentRunsPerAccount: 2,
     admissionWaitMs: 0,

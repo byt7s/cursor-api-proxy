@@ -82,6 +82,7 @@ function createTestConfig(
     thoughtMode: "drop",
     toolCalls: false,
     modelAliases: {},
+    ignoreImages: false,
     ...overrides,
   };
 }

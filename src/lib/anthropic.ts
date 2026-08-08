@@ -37,6 +37,25 @@ function anthropicBlockToText(p: any): string {
   if (!p) return "";
   if (typeof p === "string") return p;
   if (p.type === "text" && typeof p.text === "string") return p.text;
+  if (p.type === "tool_result") {
+    const id = typeof p.tool_use_id === "string" ? p.tool_use_id : "tool";
+    const body =
+      typeof p.content === "string"
+        ? p.content
+        : Array.isArray(p.content)
+          ? p.content
+              .map((c: any) =>
+                c?.type === "text" && typeof c.text === "string" ? c.text : "",
+              )
+              .filter(Boolean)
+              .join("\n")
+          : JSON.stringify(p.content ?? "");
+    return `[Tool result ${id}]: ${body}`;
+  }
+  if (p.type === "tool_use") {
+    const name = typeof p.name === "string" ? p.name : "tool";
+    return `[Tool use ${name}]: ${JSON.stringify(p.input ?? {})}`;
+  }
   if (p.type === "image") {
     const src = p.source;
     if (src?.type === "base64")

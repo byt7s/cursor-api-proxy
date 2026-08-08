@@ -200,7 +200,10 @@ const client = new OpenAI({
 | GET    | `/metrics`             | Prometheus text exposition (`CURSOR_BRIDGE_METRICS_ENABLED`); same gate as the dashboard's sensitive reads (see [Securing the dashboard](#securing-the-dashboard)) |
 | POST   | `/v1/chat/completions` | Chat completion (OpenAI shape; supports `stream: true`)               |
 | POST   | `/v1/responses`        | Responses API text generation shape; supports semantic SSE streaming  |
-| POST   | `/v1/messages`         | Anthropic Messages API (used by Claude Code; supports `stream: true`) |
+| POST   | `/v1/messages`         | Anthropic Messages API (used by Claude Code; supports `stream: true`). With `CURSOR_BRIDGE_TOOL_CALLS=true`, tools / `tool_choice` shape native `tool_use` content blocks (and `tool_result` is accepted on later turns). |
+| GET/POST | `/v1/embeddings`     | Explicit stub: **501** `embeddings_not_supported` (Cursor bridge has no embedding vectors) |
+
+**Images:** OpenAI/Anthropic image parts are rejected by default with **400** `images_not_supported`. Set `CURSOR_BRIDGE_IGNORE_IMAGES=true` to strip them and continue text-only (response may include `X-Cursor-Proxy-Images-Ignored: true`).
 
 **Usage / token fields:** Responses may include `usage` token fields (`prompt_tokens`/`completion_tokens` for Chat Completions, `input_tokens`/`output_tokens` for Responses). These are **heuristic estimates** (character count ÷ 4), not Cursor billing meters. Do not use them for invoicing.
 
@@ -261,6 +264,8 @@ Environment handling is centralized in one module. Aliases, defaults, path resol
 | `CURSOR_BRIDGE_DEFAULT_MODEL` | `auto` | Default model when request omits one |
 | `CURSOR_BRIDGE_MODEL_ALIASES` | `{}` | JSON object mapping client model ids → Cursor model ids (e.g. `{"gpt-4o":"composer-2"}`). Applied early in resolution (before Anthropic/SDK maps). Empty alias targets return **400** `invalid_model_alias`. Config file key: `modelAliases`. |
 | `CURSOR_BRIDGE_STRICT_MODEL` | `true` | Use last requested model when none specified |
+| `CURSOR_BRIDGE_TOOL_CALLS` | `false` | Bridge model tool JSON into OpenAI `tool_calls` and Anthropic `tool_use` blocks |
+| `CURSOR_BRIDGE_IGNORE_IMAGES` | `false` | When `true`, strip image parts and continue; when `false` (default), reject with `images_not_supported` |
 | `CURSOR_BRIDGE_FORCE` | `false` | Pass `--force` to Cursor CLI |
 | `CURSOR_BRIDGE_APPROVE_MCPS` | `false` | Pass `--approve-mcps` to Cursor CLI |
 | `CURSOR_BRIDGE_TIMEOUT_MS` | `300000` | Timeout per completion (ms) |

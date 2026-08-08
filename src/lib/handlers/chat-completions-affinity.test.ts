@@ -83,6 +83,7 @@ function createTestConfig(overrides: Partial<BridgeConfig> = {}): BridgeConfig {
     thoughtMode: "drop",
     toolCalls: false,
     modelAliases: {},
+    ignoreImages: false,
     sdkMaxConcurrentRuns: 48,
     sdkMaxConcurrentRunsPerAccount: 12,
     ...overrides,
