@@ -69,6 +69,13 @@ describe("loadEnvConfig", () => {
     expect(loaded.defaultModel).toBe("claude-3-opus");
   });
 
+  it("parses CURSOR_BRIDGE_TOOL_CALLS (default false)", () => {
+    expect(loadEnvConfig({ env: {} }).toolCalls).toBe(false);
+    expect(
+      loadEnvConfig({ env: { CURSOR_BRIDGE_TOOL_CALLS: "true" } }).toolCalls,
+    ).toBe(true);
+  });
+
   it("parses CURSOR_BRIDGE_MODE and marks chat-only env as explicit", () => {
     const loaded = loadEnvConfig({
       env: {

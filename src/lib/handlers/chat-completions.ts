@@ -17,6 +17,14 @@ import {
   type OpenAiChatCompletionRequest,
 } from "../openai.js";
 import {
+  buildBufferedStreamChunks,
+  buildToolBridgeSystemText,
+  containsToolCallCandidate,
+  parseToolCallOutput,
+  resolveAssistantOutput,
+  shouldUseToolBridge,
+} from "../tool-calls.js";
+import {
   logAgentError,
   logAccountAssigned,
   logAccountStats,
@@ -85,7 +93,13 @@ export async function handleChatCompletions(
 
   const cleanMessages = sanitizeMessages(body.messages ?? []);
 
-  const toolsText = toolsToSystemText(body.tools, body.functions);
+  const toolBridgeActive =
+    config.toolCalls && shouldUseToolBridge(body.tools, body.tool_choice);
+  const toolsText = config.toolCalls
+    ? toolBridgeActive
+      ? buildToolBridgeSystemText(body.tools, body.tool_choice)
+      : undefined
+    : toolsToSystemText(body.tools, body.functions);
   const messagesWithTools = toolsText
     ? [{ role: "system", content: toolsText }, ...cleanMessages]
     : cleanMessages;
@@ -194,6 +208,23 @@ export async function handleChatCompletions(
     ? { "X-Cursor-Proxy-Prompt-Truncated": "true" }
     : undefined;
 
+  const usageFor = (promptText: string, completionText: string) => {
+    const promptTokens = Math.max(1, Math.round(promptText.length / 4));
+    const completionTokens = Math.max(1, Math.round(completionText.length / 4));
+    return {
+      prompt_tokens: promptTokens,
+      completion_tokens: completionTokens,
+      total_tokens: promptTokens + completionTokens,
+    };
+  };
+
+  const writeBufferedEvents = (chunks: object[]) => {
+    for (const chunk of chunks) {
+      res.write(`data: ${JSON.stringify(chunk)}\n\n`);
+    }
+    res.write("data: [DONE]\n\n");
+  };
+
   if (body.stream) {
     const configDir = getNextAccountConfigDir();
     logAccountAssigned(configDir);
@@ -203,10 +234,65 @@ export async function handleChatCompletions(
     const abortController = new AbortController();
     abortOnClientDisconnect(res, abortController);
 
-    writeSseHeaders(res, truncatedHeaders);
+    // Tool-bridge turns buffer until complete; otherwise stream headers early.
+    if (!toolBridgeActive) {
+      writeSseHeaders(res, truncatedHeaders);
+    }
     res.on("error", () => {
       /* client disconnected mid-stream */
     });
+
+    const finishLiveStream = (accumulated: string) => {
+      logTrafficResponse(
+        config.verbose,
+        model ?? cursorModel,
+        accumulated,
+        true,
+      );
+      const usage = usageFor(agentPrompt, accumulated);
+      res.write(
+        `data: ${JSON.stringify({
+          id,
+          object: "chat.completion.chunk",
+          created,
+          model: displayModel,
+          choices: [{ index: 0, delta: {}, finish_reason: "stop" }],
+          usage,
+        })}\n\n`,
+      );
+      res.write("data: [DONE]\n\n");
+    };
+
+    const finishBufferedToolStream = (accumulated: string) => {
+      logTrafficResponse(
+        config.verbose,
+        model ?? cursorModel,
+        accumulated,
+        true,
+      );
+      if (
+        containsToolCallCandidate(accumulated) &&
+        !parseToolCallOutput(accumulated, body.tools, {
+          toolChoice: body.tool_choice,
+        })
+      ) {
+        console.warn(
+          `[tool-calls] rejected model tool output for ${displayModel ?? "default"}`,
+        );
+      }
+      writeSseHeaders(res, truncatedHeaders);
+      writeBufferedEvents(
+        buildBufferedStreamChunks({
+          id,
+          created,
+          model: displayModel,
+          text: accumulated,
+          tools: body.tools,
+          usage: usageFor(agentPrompt, accumulated),
+          options: { toolChoice: body.tool_choice },
+        }),
+      );
+    };
 
     if (config.useAcp && typeof promptForAgent === "string") {
       let accumulated = "";
@@ -217,6 +303,7 @@ export async function handleChatCompletions(
         cmdArgs,
         (chunk) => {
           accumulated += chunk;
+          if (toolBridgeActive) return;
           res.write(
             `data: ${JSON.stringify({
               id,
@@ -254,67 +341,64 @@ export async function handleChatCompletions(
               code,
               stderrOut,
             );
-            res.write(
-              `data: ${JSON.stringify({
+            if (toolBridgeActive && !res.headersSent) {
+              json(res, 500, {
                 error: { message: publicMsg, code: "cursor_cli_error" },
-              })}\n\n`,
-            );
-            res.write("data: [DONE]\n\n");
+              });
+            } else {
+              if (!res.headersSent) writeSseHeaders(res, truncatedHeaders);
+              res.write(
+                `data: ${JSON.stringify({
+                  error: { message: publicMsg, code: "cursor_cli_error" },
+                })}\n\n`,
+              );
+              res.write("data: [DONE]\n\n");
+              res.end();
+            }
             logAccountStats(config.verbose, getAccountStats());
-            res.end();
             return;
           } else {
             reportRequestSuccess(configDir, latencyMs);
           }
           logAccountStats(config.verbose, getAccountStats());
-          logTrafficResponse(
-            config.verbose,
-            model ?? cursorModel,
-            accumulated,
-            true,
-          );
-          const promptTokens = Math.max(1, Math.round(agentPrompt.length / 4));
-          const completionTokens = Math.max(
-            1,
-            Math.round(accumulated.length / 4),
-          );
-          res.write(
-            `data: ${JSON.stringify({
-              id,
-              object: "chat.completion.chunk",
-              created,
-              model: displayModel,
-              choices: [{ index: 0, delta: {}, finish_reason: "stop" }],
-              usage: {
-                prompt_tokens: promptTokens,
-                completion_tokens: completionTokens,
-                total_tokens: promptTokens + completionTokens,
-              },
-            })}\n\n`,
-          );
-          res.write("data: [DONE]\n\n");
+          if (toolBridgeActive) {
+            finishBufferedToolStream(accumulated);
+          } else {
+            finishLiveStream(accumulated);
+          }
           res.end();
         })
         .catch((err) => {
           reportRequestEnd(configDir);
           if (!abortController.signal.aborted) {
             reportRequestError(configDir, Date.now() - streamStart);
-            res.write(
-              `data: ${JSON.stringify({
+            if (toolBridgeActive && !res.headersSent) {
+              json(res, 500, {
                 error: {
                   message:
                     "The Cursor agent stream failed. See server logs for details.",
                   code: "cursor_cli_error",
                 },
-              })}\n\n`,
-            );
-            res.write("data: [DONE]\n\n");
+              });
+            } else {
+              if (!res.headersSent) writeSseHeaders(res, truncatedHeaders);
+              res.write(
+                `data: ${JSON.stringify({
+                  error: {
+                    message:
+                      "The Cursor agent stream failed. See server logs for details.",
+                    code: "cursor_cli_error",
+                  },
+                })}\n\n`,
+              );
+              res.write("data: [DONE]\n\n");
+            }
           }
           console.error(
             `[${new Date().toISOString()}] Agent stream error:`,
             err,
           );
-          res.end();
+          if (!res.writableEnded) res.end();
         });
       return;
     }
@@ -323,6 +407,7 @@ export async function handleChatCompletions(
     const parseLine = createStreamParser(
       (text) => {
         accumulated += text;
+        if (toolBridgeActive) return;
         res.write(
           `data: ${JSON.stringify({
             id,
@@ -336,32 +421,11 @@ export async function handleChatCompletions(
         );
       },
       () => {
-        logTrafficResponse(
-          config.verbose,
-          model ?? cursorModel,
-          accumulated,
-          true,
-        );
-        const promptTokens = Math.max(1, Math.round(agentPrompt.length / 4));
-        const completionTokens = Math.max(
-          1,
-          Math.round(accumulated.length / 4),
-        );
-        res.write(
-          `data: ${JSON.stringify({
-            id,
-            object: "chat.completion.chunk",
-            created,
-            model: displayModel,
-            choices: [{ index: 0, delta: {}, finish_reason: "stop" }],
-            usage: {
-              prompt_tokens: promptTokens,
-              completion_tokens: completionTokens,
-              total_tokens: promptTokens + completionTokens,
-            },
-          })}\n\n`,
-        );
-        res.write("data: [DONE]\n\n");
+        if (toolBridgeActive) {
+          finishBufferedToolStream(accumulated);
+          return;
+        }
+        finishLiveStream(accumulated);
       },
     );
 
@@ -396,22 +460,47 @@ export async function handleChatCompletions(
             code,
             stderrOut,
           );
+          if (toolBridgeActive && !res.headersSent) {
+            json(res, 500, {
+              error: {
+                message:
+                  "The Cursor agent process failed. See server logs for details.",
+                code: "cursor_cli_error",
+              },
+            });
+            logAccountStats(config.verbose, getAccountStats());
+            return;
+          }
         } else {
           reportRequestSuccess(configDir, latencyMs);
+          // CLI stream parser finish callback may not fire if the process
+          // ends without a terminal event — flush buffered tool turns here.
+          if (toolBridgeActive && !res.headersSent) {
+            finishBufferedToolStream(accumulated);
+          }
         }
         logAccountStats(config.verbose, getAccountStats());
-        res.end();
+        if (!res.writableEnded) res.end();
       })
       .catch((err) => {
         reportRequestEnd(configDir);
         if (!abortController.signal.aborted) {
           reportRequestError(configDir, Date.now() - streamStart);
+          if (toolBridgeActive && !res.headersSent) {
+            json(res, 500, {
+              error: {
+                message:
+                  "The Cursor agent stream failed. See server logs for details.",
+                code: "cursor_cli_error",
+              },
+            });
+          }
         }
         console.error(
           `[${new Date().toISOString()}] Agent stream error:`,
           err,
         );
-        res.end();
+        if (!res.writableEnded) res.end();
       });
     return;
   }
@@ -462,9 +551,27 @@ export async function handleChatCompletions(
   const content = out.stdout.trim();
   logTrafficResponse(config.verbose, model ?? cursorModel, content, false);
 
-  const promptTokens = Math.max(1, Math.round(agentPrompt.length / 4));
-  const completionTokens = Math.max(1, Math.round(content.length / 4));
-  const totalTokens = promptTokens + completionTokens;
+  const usage = usageFor(agentPrompt, content);
+  const resolved = toolBridgeActive
+    ? resolveAssistantOutput(content, body.tools, {
+        toolChoice: body.tool_choice,
+      })
+    : { kind: "text" as const, content };
+  if (
+    toolBridgeActive &&
+    resolved.kind === "text" &&
+    containsToolCallCandidate(content)
+  ) {
+    console.warn(
+      `[tool-calls] rejected model tool output for ${displayModel ?? "default"}`,
+    );
+  }
+  const message =
+    resolved.kind === "tool_call"
+      ? { role: "assistant", content: null, tool_calls: [resolved.toolCall] }
+      : { role: "assistant", content: resolved.content };
+  const finishReason =
+    resolved.kind === "tool_call" ? "tool_calls" : "stop";
 
   logAccountStats(config.verbose, getAccountStats());
   json(
@@ -478,15 +585,11 @@ export async function handleChatCompletions(
       choices: [
         {
           index: 0,
-          message: { role: "assistant", content },
-          finish_reason: "stop",
+          message,
+          finish_reason: finishReason,
         },
       ],
-      usage: {
-        prompt_tokens: promptTokens,
-        completion_tokens: completionTokens,
-        total_tokens: totalTokens,
-      },
+      usage,
     },
     truncatedHeaders,
   );

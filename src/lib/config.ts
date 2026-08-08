@@ -73,6 +73,8 @@ export type BridgeConfig = {
   bridgePackageVersion: string;
   /** Optional operator notes appended to the preamble (see CURSOR_BRIDGE_CONTEXT_EXTRA). */
   contextExtra?: string;
+  /** Bridge textual tool output to OpenAI tool_calls (CURSOR_BRIDGE_TOOL_CALLS). */
+  toolCalls: boolean;
 };
 
 export function loadBridgeConfig(opts: EnvOptions = {}): BridgeConfig {
@@ -130,5 +132,6 @@ export function loadBridgeConfig(opts: EnvOptions = {}): BridgeConfig {
     contextPreamble: env.contextPreamble,
     bridgePackageVersion: readBridgePackageVersion(),
     contextExtra: env.contextExtra,
+    toolCalls: env.toolCalls,
   };
 }
