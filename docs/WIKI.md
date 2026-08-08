@@ -25,15 +25,17 @@ With the proxy **running**, open:
 
 | URL | Purpose |
 |-----|---------|
-| `http://127.0.0.1:8765/` | **Dashboard** — status, effective config, request stats from `sessions.log`, log tail, action buttons |
-| `http://127.0.0.1:8765/wiki` | **Wiki** — this document rendered from `docs/WIKI.md` |
+| `http://127.0.0.1:8765/` | **Dashboard** — React single-page app with a sidebar: Overview, Requests, Logs, Accounts, Config, Diagnostics, Wiki, Settings |
+| `http://127.0.0.1:8765/wiki` | **Wiki** — the same app, opened on the Wiki route, rendering `docs/WIKI.md` |
 | `http://127.0.0.1:8765/accounts` | JSON list of saved Cursor accounts (auth method, email, plan/usage when available) |
 | `http://127.0.0.1:8765/healthz` | Plain **`ok`** (for scripts and load checks) |
 | `http://127.0.0.1:8765/health` | JSON health payload (version, workspace, default model, …) |
 
 Port **`8765`** is the default (`CURSOR_BRIDGE_PORT`). Host defaults to **`127.0.0.1`** (`CURSOR_BRIDGE_HOST`).
 
-The dashboard and wiki are served **without** requiring `CURSOR_BRIDGE_API_KEY` (that gate applies only to LLM API traffic). Keep the service on loopback in production.
+The app shell and its assets load without a key. When `CURSOR_BRIDGE_API_KEY` is set, mutating `/api/*` routes and sensitive reads (`/api/accounts`, `/api/config`, `/api/doctor`, `/api/requests`) require `Authorization: Bearer <CURSOR_BRIDGE_API_KEY>`. Paste that value into **Settings → Dashboard key** (stored in `sessionStorage` for the tab). If the key is unset, mutations are allowed only from loopback (`127.0.0.1` / `::1`). Keep the service on loopback in production.
+
+Navigation is hash based (`/#/accounts`, `/#/logs`, …), so `GET /` and `GET /wiki` are the only HTML entry points the server has to serve. **Settings** also holds the light/dark theme toggle (persisted in `localStorage`) and the per-page polling intervals.
 
 ---
 
@@ -42,7 +44,7 @@ The dashboard and wiki are served **without** requiring `CURSOR_BRIDGE_API_KEY` 
 ```bash
 cd /path/to/cursor-api-proxy
 npm install
-npm run build
+npm run build   # dashboard (Vite → public/dashboard/) + server (tsc → dist/)
 
 # Foreground (see stdout):
 npm start
@@ -125,18 +127,28 @@ The plist label is **`com.cursor-api-proxy`**. Use **`cursor-api-proxy disable`*
 **LLM / health / accounts**
 
 - `GET /health`, `GET /healthz`, `GET /v1/models`
-- `GET /accounts` — JSON account pool listing (same data as `cursor-api-proxy accounts`)
+- `GET /accounts` — JSON account pool listing (same data as `cursor-api-proxy accounts`; dashboard table uses `/api/accounts`)
 - `POST /v1/chat/completions`, `POST /v1/responses`, `POST /v1/messages`
 
-**Dashboard (no API key)**
+**Dashboard**
 
-- `GET /`, `GET /wiki`, `GET /static/*`
-- `GET /api/status`, `GET /api/config`, `GET /api/log`, `GET /api/stats`, `GET /api/wiki`
-- `POST /api/control` with body `{ "action": "start" | "stop" | "restart" | "enable" | "disable" }` — spawns the **`~/.local/bin/cursor-api-proxy`** script in the background (same pattern as the bridge).
+- `GET /` and `GET /wiki` both serve `public/dashboard/index.html`; `GET /static/*` serves `public/*`, so bundles resolve at `/static/dashboard/assets/…` (always open)
+- `GET /api/status`, `GET /api/log`, `GET /api/stats`, `GET /api/wiki`
+- Sensitive reads (Bearer when `CURSOR_BRIDGE_API_KEY` is set): `GET /api/config`, `GET /api/accounts`, `GET /api/doctor`, `GET /api/requests?limit=`
+- Mutations (Bearer when key set; else loopback only):
+  - `POST /api/control` `{ "action": "start" | "stop" | "restart" | "enable" | "disable" }`
+  - `POST /api/log/clear`
+  - `POST /api/accounts` `{ "name", "apiKey" }` — API-key account add (reuses `saveApiKeyAccount`)
+  - `PUT /api/accounts/:name/key` `{ "apiKey" }` — attach key to existing account
+  - `DELETE /api/accounts/:name` — remove account directory
+  - `POST /api/reset-hwid` `{ "deepClean"?: boolean }` — destructive Cursor HWID reset
+- Interactive browser login is **not** exposed over HTTP; use CLI `cursor-api-proxy login`.
+- Responses never include raw API keys. Auth badges: `API key`, `CLI`, or `CLI + key` when a session account also has `.cursor-api-key`.
+- `GET /api/config` exposes real admission caps (`maxConcurrentRuns*`, `sdkMaxConcurrentRuns*`, `admissionWaitMs`) without secrets.
 
 **`GET /accounts` notes**
 
-- Returns `{ "accounts": [ … ] }` with fields such as `name`, `authMethod`, `email`, `plan`, `usage`, `usageError`.
+- Returns `{ "accounts": [ … ] }` with fields such as `name`, `authMethod`, `email`, `plan`, `usage`, `usageError`, `hasApiKey`.
 - Agent API keys (`crsr_…`) can enrich email / key metadata via Cursor `GET /v1/me`. **Key-only** accounts keep plan/usage `null` (`usageError: "api_key_unsupported"`). A CLI/browser session JWT can coexist with `.cursor-api-key` on the same account dir (`set-key`); plan/usage then come from the session while the key remains available for key-based execution.
 
 ---
@@ -146,7 +158,8 @@ The plist label is **`com.cursor-api-proxy`**. Use **`cursor-api-proxy disable`*
 | Path | Role |
 |------|------|
 | `dist/cli.js` | Compiled server entry |
-| `public/` | Dashboard + wiki static assets |
+| `web/` | Dashboard source (React + TypeScript; design system in `web/src/design-system/`) |
+| `public/dashboard/` | Built dashboard assets — produced by `npm run build:web`, **committed** so npm/git installs need no frontend build |
 | `docs/WIKI.md` | Wiki source |
 | `scripts/cursor-api-proxy` | Launcher script (symlink target) |
 | `~/.cursor-api-proxy/sessions.log` | Default request log (one line per finished response) |
@@ -160,6 +173,10 @@ The plist label is **`com.cursor-api-proxy`**. Use **`cursor-api-proxy disable`*
 **`CLI not found` when using action buttons**
 
 Install the launcher to `~/.local/bin/cursor-api-proxy` (see [install](#install-the-launcher-script)).
+
+**Dashboard page is blank / 404 on `/`**
+
+`GET /` serves `public/dashboard/index.html`. Those assets are committed, but if you deleted or never built them, run `npm run build:web` (or the full `npm run build`).
 
 **`Started, but no health response`**
 

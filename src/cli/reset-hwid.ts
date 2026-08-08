@@ -286,6 +286,65 @@ function deepClean(cursorRoot: string): void {
 // Main export
 // ---------------------------------------------------------------------------
 
+export type ResetHwidResult = {
+  ok: true;
+  dryRun: boolean;
+  deepClean: boolean;
+  ids?: Record<string, string>;
+  paths?: { storageJson: string; stateVscdb: string; machineId: string };
+};
+
+/**
+ * Core HWID reset used by CLI and dashboard. Throws instead of process.exit.
+ */
+export async function runResetHwid(opts: {
+  deepClean?: boolean;
+  dryRun?: boolean;
+} = {}): Promise<ResetHwidResult> {
+  const globalStorage = getCursorGlobalStorage();
+  const cursorRoot = getCursorRoot();
+  const paths = {
+    storageJson: path.join(globalStorage, "storage.json"),
+    stateVscdb: path.join(globalStorage, "state.vscdb"),
+    machineId: path.join(cursorRoot, "machineId"),
+  };
+
+  if (!fs.existsSync(globalStorage)) {
+    throw new Error(
+      `Cursor config not found at ${globalStorage}. Make sure Cursor is installed and has been run at least once.`,
+    );
+  }
+
+  if (opts.dryRun) {
+    return {
+      ok: true,
+      dryRun: true,
+      deepClean: Boolean(opts.deepClean),
+      paths,
+    };
+  }
+
+  killCursor();
+  await new Promise((r) => setTimeout(r, 800));
+
+  const newIds = generateNewIds();
+  updateStorageJson(paths.storageJson, newIds);
+  updateStateVscdb(paths.stateVscdb, newIds);
+  updateMachineIdFile(newIds["telemetry.machineId"], cursorRoot);
+
+  if (opts.deepClean) {
+    deepClean(cursorRoot);
+  }
+
+  return {
+    ok: true,
+    dryRun: false,
+    deepClean: Boolean(opts.deepClean),
+    ids: newIds,
+    paths,
+  };
+}
+
 export async function handleResetHwid(opts: {
   deepClean?: boolean;
   dryRun?: boolean;
@@ -294,52 +353,31 @@ export async function handleResetHwid(opts: {
   console.log("  Resets all machine / telemetry IDs so Cursor sees a fresh install.");
   console.log("  Cursor must be closed — it will be killed automatically.\n");
 
-  const globalStorage = getCursorGlobalStorage();
-  const cursorRoot = getCursorRoot();
-
-  if (!fs.existsSync(globalStorage)) {
-    console.log(`❌ Cursor config not found at:\n   ${globalStorage}`);
-    console.log("   Make sure Cursor is installed and has been run at least once.");
+  try {
+    const result = await runResetHwid(opts);
+    if (result.dryRun && result.paths) {
+      console.log("  [DRY RUN] Would reset IDs in:");
+      console.log(`    ${result.paths.storageJson}`);
+      console.log(`    ${result.paths.stateVscdb}`);
+      console.log(`    ${result.paths.machineId}`);
+      return;
+    }
+    if (result.ids) {
+      log("🎲", "Generated new IDs:");
+      for (const [k, v] of Object.entries(result.ids)) {
+        console.log(`       ${k}: ${v}`);
+      }
+      console.log();
+      log("📝", "Updated storage.json / state.vscdb / machineId");
+      if (result.deepClean) {
+        console.log();
+        log("✅", "Deep clean requested (session/cookie wipe)");
+      }
+    }
+    console.log("\n✅ HWID reset complete. You can now restart Cursor.\n");
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err);
+    console.error(`❌ ${msg}`);
     process.exit(1);
   }
-
-  if (opts.dryRun) {
-    console.log("  [DRY RUN] Would reset IDs in:");
-    console.log(`    ${path.join(globalStorage, "storage.json")}`);
-    console.log(`    ${path.join(globalStorage, "state.vscdb")}`);
-    console.log(`    ${path.join(cursorRoot, "machineId")}`);
-    return;
-  }
-
-  // 1. Kill Cursor
-  killCursor();
-
-  // Small delay so the OS can release file handles
-  await new Promise((r) => setTimeout(r, 800));
-
-  // 2. Generate new IDs
-  const newIds = generateNewIds();
-  log("🎲", "Generated new IDs:");
-  for (const [k, v] of Object.entries(newIds)) {
-    console.log(`       ${k}: ${v}`);
-  }
-  console.log();
-
-  // 3. Update files
-  log("📝", "Updating storage.json...");
-  updateStorageJson(path.join(globalStorage, "storage.json"), newIds);
-
-  log("🗄️ ", "Updating state.vscdb...");
-  updateStateVscdb(path.join(globalStorage, "state.vscdb"), newIds);
-
-  log("🔑", "Updating machineId file...");
-  updateMachineIdFile(newIds["telemetry.machineId"], cursorRoot);
-
-  // 4. Optional deep clean
-  if (opts.deepClean) {
-    console.log();
-    deepClean(cursorRoot);
-  }
-
-  console.log("\n✅ HWID reset complete. You can now restart Cursor.\n");
 }

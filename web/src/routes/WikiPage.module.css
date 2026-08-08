@@ -1,0 +1,105 @@
+.prose {
+  color: var(--color-text-secondary);
+  font-size: var(--font-size-md);
+  line-height: var(--line-height-relaxed);
+  overflow-wrap: anywhere;
+}
+
+.prose h1,
+.prose h2,
+.prose h3,
+.prose h4 {
+  color: var(--color-text);
+  letter-spacing: var(--letter-spacing-tight);
+  margin-block: var(--space-6) var(--space-3);
+  line-height: var(--line-height-tight);
+}
+
+.prose h1 {
+  font-size: var(--font-size-2xl);
+}
+
+.prose h2 {
+  font-size: var(--font-size-xl);
+  border-block-end: var(--border-width) solid var(--color-border);
+  padding-block-end: var(--space-2);
+}
+
+.prose h3 {
+  font-size: var(--font-size-lg);
+}
+
+.prose p,
+.prose ul,
+.prose ol {
+  margin-block: var(--space-3);
+}
+
+.prose ul,
+.prose ol {
+  padding-inline-start: var(--space-6);
+}
+
+.prose li {
+  margin-block: var(--space-1);
+}
+
+.prose code {
+  background: var(--color-neutral-bg);
+  border: var(--border-width) solid var(--color-neutral-border);
+  border-radius: var(--radius-sm);
+  padding-inline: var(--space-1);
+  font-size: var(--font-size-sm);
+}
+
+.prose pre {
+  background: var(--color-surface-sunken);
+  border: var(--border-width) solid var(--color-border);
+  border-radius: var(--radius-md);
+  padding: var(--space-3);
+  overflow-x: auto;
+  font-size: var(--font-size-sm);
+  line-height: var(--line-height-normal);
+}
+
+.prose pre code {
+  background: none;
+  border: 0;
+  padding: var(--space-0);
+}
+
+.prose table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: var(--font-size-sm);
+  margin-block: var(--space-4);
+}
+
+.prose th,
+.prose td {
+  border: var(--border-width) solid var(--color-border);
+  padding: var(--space-2) var(--space-3);
+  text-align: start;
+}
+
+.prose th {
+  background: var(--color-surface-raised);
+  color: var(--color-text-muted);
+}
+
+.prose blockquote {
+  margin: var(--space-4) var(--space-0);
+  padding-inline-start: var(--space-4);
+  border-inline-start: 3px solid var(--color-border-strong);
+  color: var(--color-text-muted);
+}
+
+.prose hr {
+  border: 0;
+  border-block-start: var(--border-width) solid var(--color-border);
+  margin-block: var(--space-6);
+}
+
+.prose img {
+  max-width: 100%;
+}

@@ -1,0 +1,32 @@
+.viewer {
+  background: var(--color-surface-sunken);
+  font-family: var(--font-family-mono);
+  font-size: var(--font-size-xs);
+  line-height: var(--line-height-relaxed);
+  overflow: auto;
+  padding: var(--space-3);
+  max-height: 460px;
+  min-height: var(--space-16);
+}
+
+.line {
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  color: var(--color-text-secondary);
+}
+
+.timestamp {
+  color: var(--color-text-muted);
+}
+
+.error {
+  color: var(--color-danger-fg);
+}
+
+.warn {
+  color: var(--color-warning-fg);
+}
+
+.ok {
+  color: var(--color-success-fg);
+}

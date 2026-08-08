@@ -1,0 +1,52 @@
+.root {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-2);
+  font-size: var(--font-size-sm);
+  color: var(--color-text-secondary);
+}
+
+.dot {
+  width: var(--space-2);
+  height: var(--space-2);
+  border-radius: var(--radius-full);
+  flex: none;
+  background: var(--color-neutral-fg);
+}
+
+.neutral {
+  background: var(--color-neutral-fg);
+}
+.brand {
+  background: var(--color-brand);
+}
+.success {
+  background: var(--color-success);
+  box-shadow: 0 0 0 3px var(--color-success-bg);
+}
+.warning {
+  background: var(--color-warning);
+  box-shadow: 0 0 0 3px var(--color-warning-bg);
+}
+.danger {
+  background: var(--color-danger);
+  box-shadow: 0 0 0 3px var(--color-danger-bg);
+}
+.info {
+  background: var(--color-info);
+  box-shadow: 0 0 0 3px var(--color-info-bg);
+}
+
+.pulse {
+  animation: pulse 2s var(--easing-standard) infinite;
+}
+
+@keyframes pulse {
+  0%,
+  100% {
+    opacity: 1;
+  }
+  50% {
+    opacity: 0.45;
+  }
+}
