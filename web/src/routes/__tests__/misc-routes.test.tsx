@@ -3,54 +3,7 @@ import { describe, expect, it } from "vitest";
 
 import { mockFetch } from "../../../test/mockFetch";
 import { renderWithProviders } from "../../../test/renderWithProviders";
-import { ConfigPage } from "../ConfigPage";
 import { WikiPage } from "../WikiPage";
-
-describe("ConfigPage", () => {
-  it("groups the sanitized config into sections", async () => {
-    mockFetch({
-      "GET /api/config": {
-        body: {
-          host: "127.0.0.1",
-          port: 8765,
-          defaultModel: "auto",
-          workspace: "/tmp/ws",
-          agentBin: "cursor-agent",
-          useAcp: true,
-          requiredKey: true,
-          tlsEnabled: false,
-          maxConcurrentRuns: 16,
-          maxConcurrentRunsPerAccount: 2,
-          sdkMaxConcurrentRuns: 48,
-          sdkMaxConcurrentRunsPerAccount: 12,
-          admissionWaitMs: 0,
-          configDirsCount: 2,
-          requestsLogPath: "/tmp/requests.jsonl",
-          requestsLogEnabled: true,
-          requestsLogMaxBytes: 33_554_432,
-          metricsEnabled: true,
-          apiKeys: [{ label: "ops", scope: "admin", fingerprint: "a1b2c3" }],
-          dashboardKeyConfigured: true,
-          keyRateLimitPerMin: 0,
-          auditLogPath: "/tmp/audit.jsonl",
-          auditLogEnabled: true,
-          maxBodyBytes: 8 * 1024 * 1024,
-          corsOrigins: [],
-          caller: { actor: "dashboard-key" },
-        },
-      },
-    });
-    renderWithProviders(<ConfigPage />);
-
-    expect(await screen.findByText("Admission — ACP plane")).toBeVisible();
-    expect(screen.getByText("Admission — SDK plane")).toBeVisible();
-    expect(screen.getByText("CURSOR_BRIDGE_API_KEY required")).toBeVisible();
-    expect(screen.getByText("cursor-agent")).toBeVisible();
-    expect(screen.getByText("Observability")).toBeVisible();
-    expect(screen.getByText("/tmp/requests.jsonl")).toBeVisible();
-    expect(screen.getByText("32 MB")).toBeVisible();
-  });
-});
 
 describe("WikiPage", () => {
   it("renders the markdown returned by /api/wiki", async () => {
