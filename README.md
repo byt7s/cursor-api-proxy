@@ -176,6 +176,7 @@ const client = new OpenAI({
 | Method | Path                   | Description                                                           |
 | ------ | ---------------------- | --------------------------------------------------------------------- |
 | GET    | `/health`              | Server and config info                                                |
+| GET    | `/accounts`            | JSON account list (auth, email, plan/usage when available; same data as `cursor-api-proxy accounts`) |
 | GET    | `/v1/models`           | List Cursor models (from `agent --list-models`)                       |
 | POST   | `/v1/chat/completions` | Chat completion (OpenAI shape; supports `stream: true`)               |
 | POST   | `/v1/responses`        | Responses API text generation shape; supports semantic SSE streaming  |
@@ -288,6 +289,8 @@ npx cursor-api-proxy login account3
 
 **Auto-Discovery:** When you start the proxy server normally (`npx cursor-api-proxy`), it will automatically find all accounts under that `accounts` directory and include them in the rotation pool.
 
+Inspect the pool over HTTP with `GET /accounts`.
+
 ### 2. Manual Config Directories
 
 If you already have separate configuration folders (or want to specify them explicitly), you can override auto-discovery using the `CURSOR_CONFIG_DIRS` environment variable:
@@ -337,6 +340,7 @@ Listens on `http://127.0.0.1:8765` by default (host bind via `HOST_BIND` / `HOST
 
 ```bash
 curl -s http://127.0.0.1:8765/healthz
+curl -s http://127.0.0.1:8765/accounts
 curl -s http://127.0.0.1:8765/v1/models
 ```
 
