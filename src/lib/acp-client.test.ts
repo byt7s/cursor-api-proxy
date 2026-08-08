@@ -64,6 +64,26 @@ describe("resolveAcpModelConfigValue", () => {
       ]),
     ).toBe("first[]");
   });
+
+  it("maps cursor-grok flat alias to parameterized id when catalog is empty", () => {
+    expect(resolveAcpModelConfigValue("cursor-grok-4.5-high-fast", undefined)).toBe(
+      "grok-4.5[effort=high,fast=true]",
+    );
+    expect(resolveAcpModelConfigValue("cursor-grok-4.5-high-fast", [])).toBe(
+      "grok-4.5[effort=high,fast=true]",
+    );
+  });
+
+  it("matches parameterized grok id in the ACP catalog by modelId", () => {
+    expect(
+      resolveAcpModelConfigValue("cursor-grok-4.5-high-fast", [
+        {
+          modelId: "grok-4.5[effort=high,fast=true]",
+          name: "grok-4.5",
+        },
+      ]),
+    ).toBe("grok-4.5[effort=high,fast=true]");
+  });
 });
 
 describe("runAcpSync", () => {
