@@ -11,6 +11,8 @@ import {
   reportRequestSuccess,
 } from "./account-pool.js";
 import { applyPlanUpgradeQuarantine } from "./account-quarantine.js";
+import { AdmissionCapacityError } from "./admission.js";
+import { AcpWorkerBusyError } from "./acp-pool.js";
 import { logAccountAssigned } from "./request-log.js";
 
 const RATE_LIMIT_PENALTY_MS = 60000;
@@ -23,6 +25,7 @@ export type AgentAttemptResult = {
   code: number;
   stdout?: string;
   stderr: string;
+  failureText?: string;
 };
 
 export type SyncFailoverSuccess<T extends AgentAttemptResult> = {
@@ -68,9 +71,17 @@ function poolExhaustedStatus(): "all_disabled" | "all_rate_limited" {
  * reports a rate limit or a plan-upgrade quarantine. Only fails with
  * all_rate_limited / all_disabled when no usable account remains.
  */
+export type AccountFailoverOptions = {
+  /** Sticky conversation pin — try this account first when still usable. */
+  preferConfigDir?: string;
+  /** Called when leaving an account for failover (rate-limit / plan / busy). */
+  onAccountFailover?: (configDir: string) => void;
+};
+
 export async function runSyncWithAccountFailover<T extends AgentAttemptResult>(
   runOnce: (configDir: string | undefined) => Promise<T>,
   signal?: AbortSignal,
+  options?: AccountFailoverOptions,
 ): Promise<SyncFailoverOutcome<T>> {
   const tried = new Set<string>();
   let lastRateLimited: {
@@ -80,7 +91,10 @@ export async function runSyncWithAccountFailover<T extends AgentAttemptResult>(
   } | undefined;
 
   while (!signal?.aborted) {
-    const configDir = getNextAccountConfigDir({ exclude: tried });
+    const configDir = getNextAccountConfigDir({
+      exclude: tried,
+      prefer: options?.preferConfigDir,
+    });
     if (!configDir) {
       // Pool has accounts but none are available (disabled / rate-limited / excluded).
       if (getAccountPoolSize() > 0) {
@@ -166,6 +180,7 @@ export async function runSyncWithAccountFailover<T extends AgentAttemptResult>(
         console.log(
           `[${new Date().toISOString()}] account ${path.basename(configDir)} plan-upgrade quarantine; trying another account`,
         );
+        options?.onAccountFailover?.(configDir);
         continue;
       }
 
@@ -176,6 +191,16 @@ export async function runSyncWithAccountFailover<T extends AgentAttemptResult>(
         console.log(
           `[${new Date().toISOString()}] account ${path.basename(configDir)} rate-limited; trying another account`,
         );
+        options?.onAccountFailover?.(configDir);
+        continue;
+      }
+
+      if (
+        result.code !== 0 &&
+        /sdk_resume_failed/i.test(result.stderr || result.failureText || "")
+      ) {
+        reportRequestError(configDir, latencyMs);
+        options?.onAccountFailover?.(configDir);
         continue;
       }
 
@@ -186,6 +211,22 @@ export async function runSyncWithAccountFailover<T extends AgentAttemptResult>(
 
       reportRequestSuccess(configDir, latencyMs);
       return { status: "ok", result, configDir, latencyMs };
+    } catch (err) {
+      if (err instanceof AcpWorkerBusyError) {
+        console.log(
+          `[${new Date().toISOString()}] account ${path.basename(configDir)} ACP worker busy; trying another account`,
+        );
+        options?.onAccountFailover?.(configDir);
+        continue;
+      }
+      if (err instanceof AdmissionCapacityError) {
+        console.log(
+          `[${new Date().toISOString()}] account ${path.basename(configDir)} at admission capacity; trying another account`,
+        );
+        options?.onAccountFailover?.(configDir);
+        continue;
+      }
+      throw err;
     } finally {
       reportRequestEnd(configDir);
     }
@@ -242,12 +283,20 @@ export async function runStreamWithAccountFailover(opts: {
   runOnce: (
     configDir: string | undefined,
     onChunk: (chunk: string) => void,
+    onThought?: (chunk: string) => void,
   ) => Promise<{ code: number; stderr: string }>;
   /** Called once before the first client-visible chunk (or on clean empty success). */
   onCommit: () => void;
   onChunk: (chunk: string) => void;
+  /**
+   * Optional thought-channel callback. Delivery commits the stream (same as
+   * onChunk) so silent account failover cannot retry after reasoning SSE.
+   */
+  onThought?: (chunk: string) => void;
+  preferConfigDir?: string;
+  onAccountFailover?: (configDir: string) => void;
 }): Promise<StreamFailoverOutcome> {
-  const { signal, runOnce, onCommit, onChunk } = opts;
+  const { signal, runOnce, onCommit, onChunk, onThought } = opts;
   const tried = new Set<string>();
   let committed = false;
   let lastRateLimited: {
@@ -265,8 +314,20 @@ export async function runStreamWithAccountFailover(opts: {
     onChunk(chunk);
   };
 
+  const deliverThought = (chunk: string) => {
+    if (!onThought) return;
+    if (!committed) {
+      committed = true;
+      onCommit();
+    }
+    onThought(chunk);
+  };
+
   while (!signal?.aborted) {
-    const configDir = getNextAccountConfigDir({ exclude: tried });
+    const configDir = getNextAccountConfigDir({
+      exclude: tried,
+      prefer: opts.preferConfigDir,
+    });
     if (!configDir) {
       if (getAccountPoolSize() > 0) {
         const status = poolExhaustedStatus();
@@ -290,7 +351,11 @@ export async function runStreamWithAccountFailover(opts: {
         logAccountAssigned(undefined);
         const start = Date.now();
         try {
-          const { code, stderr } = await runOnce(undefined, deliver);
+          const { code, stderr } = await runOnce(
+            undefined,
+            deliver,
+            onThought ? deliverThought : undefined,
+          );
           const latencyMs = Date.now() - start;
           if (
             !committed &&
@@ -370,10 +435,19 @@ export async function runStreamWithAccountFailover(opts: {
     let sawChunk = false;
 
     try {
-      const { code, stderr } = await runOnce(configDir, (chunk) => {
-        sawChunk = true;
-        deliver(chunk);
-      });
+      const { code, stderr } = await runOnce(
+        configDir,
+        (chunk) => {
+          sawChunk = true;
+          deliver(chunk);
+        },
+        onThought
+          ? (chunk) => {
+              sawChunk = true;
+              deliverThought(chunk);
+            }
+          : undefined,
+      );
       const latencyMs = Date.now() - start;
 
       if (signal?.aborted) {
@@ -390,6 +464,7 @@ export async function runStreamWithAccountFailover(opts: {
         console.log(
           `[${new Date().toISOString()}] account ${path.basename(configDir)} plan-upgrade quarantine; trying another account`,
         );
+        opts.onAccountFailover?.(configDir);
         continue;
       }
 
@@ -401,6 +476,7 @@ export async function runStreamWithAccountFailover(opts: {
           console.log(
             `[${new Date().toISOString()}] account ${path.basename(configDir)} rate-limited; trying another account`,
           );
+          opts.onAccountFailover?.(configDir);
           continue;
         }
         // Already committed content to the client — cannot silently failover.
@@ -441,6 +517,22 @@ export async function runStreamWithAccountFailover(opts: {
         latencyMs,
         committed,
       };
+    } catch (err) {
+      if (err instanceof AcpWorkerBusyError && !committed) {
+        console.log(
+          `[${new Date().toISOString()}] account ${path.basename(configDir)} ACP worker busy; trying another account`,
+        );
+        opts.onAccountFailover?.(configDir);
+        continue;
+      }
+      if (err instanceof AdmissionCapacityError && !committed) {
+        console.log(
+          `[${new Date().toISOString()}] account ${path.basename(configDir)} at admission capacity; trying another account`,
+        );
+        opts.onAccountFailover?.(configDir);
+        continue;
+      }
+      throw err;
     } finally {
       reportRequestEnd(configDir);
     }

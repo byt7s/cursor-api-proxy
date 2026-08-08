@@ -32,6 +32,11 @@ export type GetNextConfigDirOptions = {
   /** Config dirs already tried in this request (e.g. hit rate limit). */
   exclude?: ReadonlySet<string>;
   /**
+   * Sticky session pin: try this account first when still usable (not
+   * excluded / disabled / rate-limited).
+   */
+  prefer?: string;
+  /**
    * When true (default false), if every account is rate-limited, pick the one
    * that recovers soonest. Failover paths leave this false so the caller can
    * return an error instead of forcing a doomed attempt.
@@ -74,6 +79,7 @@ export class AccountPool {
     const now = Date.now();
     const exclude = options.exclude;
     const allowRateLimitedFallback = options.allowRateLimitedFallback ?? false;
+    const prefer = options.prefer;
 
     const notExcluded = (exclude?.size
       ? this.accounts.filter((a) => !exclude.has(a.configDir))
@@ -82,6 +88,16 @@ export class AccountPool {
 
     if (notExcluded.length === 0) {
       return undefined;
+    }
+
+    if (prefer) {
+      const pinned = notExcluded.find(
+        (a) => a.configDir === prefer && a.rateLimitUntil < now,
+      );
+      if (pinned) {
+        pinned.lastUsed = now;
+        return pinned.configDir;
+      }
     }
 
     const availableAccounts = notExcluded.filter(

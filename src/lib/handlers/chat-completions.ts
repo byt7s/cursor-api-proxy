@@ -39,6 +39,13 @@ import {
   runStreamWithAccountFailover,
   runSyncWithAccountFailover,
 } from "../account-failover.js";
+import { resolveAccountEngine } from "../execution-engine.js";
+import {
+  bindSessionAffinity,
+  clearSessionAffinity,
+  getSessionAffinity,
+  resolveConversationId,
+} from "../session-affinity.js";
 import { abortOnClientDisconnect } from "../client-disconnect.js";
 import {
   fitPromptToWinCmdline,
@@ -227,6 +234,20 @@ export async function handleChatCompletions(
   const promptForAgent =
     config.promptViaStdin || config.useAcp ? agentPrompt : undefined;
 
+  // Sticky conversation → account (+ SDK agentId). See session-affinity.ts.
+  const conversationId = resolveConversationId(
+    req.headers,
+    body as { conversation_id?: unknown; user?: unknown },
+  );
+  const affinity = conversationId
+    ? getSessionAffinity(conversationId)
+    : undefined;
+  const onAccountFailover = (_configDir: string) => {
+    // Drop pin so the next account starts a virgin session; clients already
+    // resend message history for context replay.
+    if (conversationId) clearSessionAffinity(conversationId);
+  };
+
   const truncatedHeaders = fit.truncated
     ? { "X-Cursor-Proxy-Prompt-Truncated": "true" }
     : undefined;
@@ -357,11 +378,14 @@ export async function handleChatCompletions(
     if (config.useAcp && typeof promptForAgent === "string") {
       let accumulated = "";
       let accumulatedThought = "";
+      let lastStreamAgentId: string | undefined;
       try {
         latency.mark("account_select_end");
         latency.mark("spawn_start");
         const outcome = await runStreamWithAccountFailover({
           signal: abortController.signal,
+          preferConfigDir: affinity?.configDir,
+          onAccountFailover,
           onCommit: ensureHeaders,
           onChunk: (chunk) => {
             accumulated += chunk;
@@ -385,8 +409,15 @@ export async function handleChatCompletions(
                 },
               }
             : {}),
-          runOnce: (configDir, onChunk, onThought) =>
-            runAgentStream(
+          runOnce: async (configDir, onChunk, onThought) => {
+            const live = conversationId
+              ? getSessionAffinity(conversationId)
+              : undefined;
+            const resumeAgentId =
+              live && live.configDir === configDir
+                ? live.agentId
+                : undefined;
+            const result = await runAgentStream(
               config,
               workspaceDir,
               effectiveChatOnly,
@@ -401,8 +432,26 @@ export async function handleChatCompletions(
                     accumulatedThought += t;
                   }
                 : onThought,
-            ),
+              resumeAgentId,
+            );
+            lastStreamAgentId = result.agentId;
+            return result;
+          },
         });
+        if (
+          conversationId &&
+          outcome.status === "ok" &&
+          outcome.configDir
+        ) {
+          bindSessionAffinity(conversationId, {
+            configDir: outcome.configDir,
+            agentId: lastStreamAgentId,
+            engine: resolveAccountEngine(
+              outcome.configDir,
+              config.defaultEngine,
+            ),
+          });
+        }
 
         if (outcome.status === "aborted") {
           latency.mark("shape_done");
@@ -540,22 +589,30 @@ export async function handleChatCompletions(
     }
 
     let accumulated = "";
+    let lastCliStreamAgentId: string | undefined;
     try {
       latency.mark("account_select_end");
       latency.mark("spawn_start");
       const outcome = await runStreamWithAccountFailover({
         signal: abortController.signal,
+        preferConfigDir: affinity?.configDir,
+        onAccountFailover,
         onCommit: ensureHeaders,
         onChunk: (text) => {
           accumulated += text;
           if (!toolBridgeActive) writeChatChunk(text);
           else markModelFirstByte(latency);
         },
-        runOnce: (configDir, onChunk) => {
+        runOnce: async (configDir, onChunk) => {
           const parseLine = createStreamParser(onChunk, () => {
             /* finish written after successful failover outcome */
           });
-          return runAgentStream(
+          const live = conversationId
+            ? getSessionAffinity(conversationId)
+            : undefined;
+          const resumeAgentId =
+            live && live.configDir === configDir ? live.agentId : undefined;
+          const result = await runAgentStream(
             config,
             workspaceDir,
             effectiveChatOnly,
@@ -565,9 +622,27 @@ export async function handleChatCompletions(
             promptForAgent,
             configDir,
             abortController.signal,
+            undefined,
+            resumeAgentId,
           );
+          lastCliStreamAgentId = result.agentId;
+          return result;
         },
       });
+      if (
+        conversationId &&
+        outcome.status === "ok" &&
+        outcome.configDir
+      ) {
+        bindSessionAffinity(conversationId, {
+          configDir: outcome.configDir,
+          agentId: lastCliStreamAgentId,
+          engine: resolveAccountEngine(
+            outcome.configDir,
+            config.defaultEngine,
+          ),
+        });
+      }
 
       if (outcome.status === "aborted") {
         latency.mark("shape_done");
@@ -668,8 +743,11 @@ export async function handleChatCompletions(
   latency.mark("account_select_end");
   latency.mark("spawn_start");
   const outcome = await runSyncWithAccountFailover(
-    (configDir) =>
-      runAgentSync(
+    (configDir) => {
+      const live = conversationId
+        ? getSessionAffinity(conversationId)
+        : undefined;
+      return runAgentSync(
         config,
         workspaceDir,
         effectiveChatOnly,
@@ -678,9 +756,26 @@ export async function handleChatCompletions(
         promptForAgent,
         configDir,
         abortController.signal,
-      ),
+        live && live.configDir === configDir ? live.agentId : undefined,
+      );
+    },
     abortController.signal,
+    {
+      preferConfigDir: affinity?.configDir,
+      onAccountFailover,
+    },
   );
+  if (
+    conversationId &&
+    outcome.status === "ok" &&
+    outcome.configDir
+  ) {
+    bindSessionAffinity(conversationId, {
+      configDir: outcome.configDir,
+      agentId: outcome.result.agentId,
+      engine: resolveAccountEngine(outcome.configDir, config.defaultEngine),
+    });
+  }
 
   if (outcome.status === "aborted") {
     latency.mark("shape_done");

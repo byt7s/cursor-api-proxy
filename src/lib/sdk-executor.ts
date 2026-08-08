@@ -11,6 +11,8 @@ export type SdkRunOptions = {
   signal?: AbortSignal;
   onChunk?: (text: string) => void;
   onThought?: (text: string) => void;
+  /** When set, try `Agent.resume` before create (sticky conversation). */
+  resumeAgentId?: string;
 };
 
 type SdkModule = typeof import("@cursor/sdk");
@@ -83,16 +85,38 @@ export async function runSdkAgent(
     const sdk = await loadSdk();
     if (stopReason) return failure(stoppedMessage(opts.signal));
 
-    agent = await sdk.Agent.create({
-      apiKey: opts.apiKey,
-      model,
-      local: {
-        cwd: opts.cwd,
-        settingSources: [],
-      },
-    });
+    const localOpts = {
+      cwd: opts.cwd,
+      settingSources: [] as [],
+    };
+
+    if (opts.resumeAgentId) {
+      try {
+        agent = await sdk.Agent.resume(opts.resumeAgentId, {
+          apiKey: opts.apiKey,
+          model,
+          local: localOpts,
+        });
+      } catch (err) {
+        const detail = err instanceof Error ? err.message : String(err);
+        console.warn(
+          `[sdk] Agent.resume(${opts.resumeAgentId}) failed; creating new agent (${detail})`,
+        );
+        agent = undefined;
+      }
+    }
+
+    if (!agent) {
+      agent = await sdk.Agent.create({
+        apiKey: opts.apiKey,
+        model,
+        local: localOpts,
+      });
+    }
 
     if (stopReason) return failure(stoppedMessage(opts.signal));
+
+    const agentId = agent.agentId;
 
     const run = await agent.send(opts.prompt, {
       onDelta: ({ update }) => {
@@ -122,7 +146,7 @@ export async function runSdkAgent(
     const reasoning = thoughts.length ? thoughts.join("") : undefined;
 
     if (result.status === "finished") {
-      return { code: 0, stdout, stderr: "", reasoning };
+      return { code: 0, stdout, stderr: "", reasoning, agentId };
     }
     const message =
       result.status === "cancelled"
@@ -136,6 +160,7 @@ export async function runSdkAgent(
       stderr: message,
       failureText: message,
       reasoning,
+      agentId,
     };
   } catch (err) {
     return failure(err instanceof Error ? err.message : String(err));
