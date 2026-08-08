@@ -52,6 +52,7 @@ function createTestConfig(
     maxMode: false,
     promptViaStdin: false,
     useAcp: false,
+    defaultEngine: "acp",
     acpSkipAuthenticate: false,
     acpRawDebug: false,
     configDirs: [],

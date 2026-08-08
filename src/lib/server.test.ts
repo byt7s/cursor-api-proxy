@@ -71,6 +71,7 @@ function createTestConfig(overrides: Partial<BridgeConfig> = {}): BridgeConfig {
     maxMode: false,
     promptViaStdin: false,
     useAcp: false,
+    defaultEngine: "acp",
     acpSkipAuthenticate: false,
     acpRawDebug: false,
     configDirs: overrides.configDirs ?? [],

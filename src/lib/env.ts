@@ -1,6 +1,10 @@
 import * as fs from "node:fs";
 import * as path from "node:path";
 
+import {
+  parseExecutionEngine,
+  type ExecutionEngine,
+} from "./execution-engine.js";
 import type { CursorExecutionMode } from "./execution-mode.js";
 import { tryParseExecutionModeEnv } from "./execution-mode.js";
 
@@ -43,6 +47,12 @@ export type LoadedEnv = {
   promptViaStdin: boolean;
   /** When true, use ACP (Agent Client Protocol) over stdio instead of CLI argv (fixes prompt delivery on Windows). */
   useAcp: boolean;
+  /**
+   * Default execution engine when an account has no `.cursor-bridge-engine` file.
+   * From `CURSOR_BRIDGE_DEFAULT_ENGINE` (`acp` | `sdk`). ACP remains the default.
+   * SDK path requires Node >= 22.13 and a Dashboard API key.
+   */
+  defaultEngine: ExecutionEngine;
   /** Pool of cursor configuration directories for round-robin account rotation. */
   configDirs: string[];
   /** When true, runs each config dir on its own incrementing port starting from `port` */
@@ -427,6 +437,9 @@ export function loadEnvConfig(opts: EnvOptions = {}): LoadedEnv {
     maxMode: envBool(env, ["CURSOR_BRIDGE_MAX_MODE"], false),
     promptViaStdin: envBool(env, ["CURSOR_BRIDGE_PROMPT_VIA_STDIN"], false),
     useAcp: envBool(env, ["CURSOR_BRIDGE_USE_ACP"], true),
+    defaultEngine:
+      parseExecutionEngine(envString(env, ["CURSOR_BRIDGE_DEFAULT_ENGINE"])) ??
+      "acp",
     configDirs,
     multiPort: envBool(env, ["CURSOR_BRIDGE_MULTI_PORT"], false),
     winCmdlineMax,

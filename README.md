@@ -214,6 +214,7 @@ Environment handling is centralized in one module. Aliases, defaults, path resol
 | `CURSOR_BRIDGE_MULTI_PORT` | `false` | When `true` and multiple config dirs are set, spawns a separate server per directory on incrementing ports starting from `CURSOR_BRIDGE_PORT`. |
 | `CURSOR_BRIDGE_PROMPT_VIA_STDIN` | `false` | When `true`, sends the user prompt via **stdin** instead of argv (helps on Windows if argv is truncated). |
 | `CURSOR_BRIDGE_USE_ACP` | `true` | When `true` (default), uses **ACP** over stdio (`agent acp`) with a **warm process per account** (new `session/new` each request — no shared chat memory). If every warm worker is busy, spawns a temporary ACP for that prompt. Set `false` to use `agent --print` per request. See [Cursor ACP docs](https://cursor.com/docs/cli/acp). Set `NODE_DEBUG=cursor-api-proxy:acp` to debug. |
+| `CURSOR_BRIDGE_DEFAULT_ENGINE` | `acp` | Default execution engine when an account has no `.cursor-bridge-engine` file. `acp` (default) uses the Cursor agent CLI/ACP path (Node >=18). `sdk` uses in-process `@cursor/sdk` (requires **Node >=22.13** and a Dashboard API key on that account or `CURSOR_API_KEY`). Per-account override: write `sdk` or `acp` to `~/.cursor-api-proxy/accounts/<name>/.cursor-bridge-engine`. |
 | `CURSOR_BRIDGE_ACP_SKIP_AUTHENTICATE` | auto | When `CURSOR_API_KEY` is set, skips the ACP authenticate step. Set to `true` to skip when using `agent login` instead. |
 | `CURSOR_BRIDGE_ACP_RAW_DEBUG` | `false` | When `1` or `true`, log raw JSON-RPC from ACP stdout (requires `NODE_DEBUG=cursor-api-proxy:acp`). |
 | `CURSOR_AGENT_BIN` | `agent` | Path to Cursor CLI binary. Alias precedence: `CURSOR_AGENT_BIN`, then `CURSOR_CLI_BIN`, then `CURSOR_CLI_PATH`. |
@@ -295,7 +296,7 @@ You can attach a Dashboard API key to an account that already has a CLI login se
 npx cursor-api-proxy set-key account1 crsr_...
 ```
 
-Inspect the pool over HTTP with `GET /accounts`.
+Inspect the pool over HTTP with `GET /accounts` (also shown as a table on the dashboard, and as `GET /api/accounts` for the UI).
 
 ### 2. Manual Config Directories
 

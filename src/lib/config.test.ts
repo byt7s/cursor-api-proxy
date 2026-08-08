@@ -24,6 +24,7 @@ describe("loadBridgeConfig", () => {
     expect(config.contextPreamble).toBe(true);
     expect(config.bridgePackageVersion).toMatch(/^\d+\.\d+\.\d+/);
     expect(config.contextExtra).toBeUndefined();
+    expect(config.defaultEngine).toBe("acp");
   });
 
   it("assembles config from the centralized env layer", () => {
