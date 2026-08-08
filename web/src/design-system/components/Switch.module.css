@@ -1,0 +1,61 @@
+.root {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-2);
+  cursor: pointer;
+  font-size: var(--font-size-sm);
+  color: var(--color-text-secondary);
+  user-select: none;
+}
+
+.root[data-disabled="true"] {
+  opacity: 0.55;
+  cursor: not-allowed;
+}
+
+.track {
+  position: relative;
+  width: var(--space-8);
+  height: var(--space-4);
+  flex: none;
+  border-radius: var(--radius-full);
+  background: var(--color-neutral-bg);
+  border: var(--border-width) solid var(--color-border);
+  transition:
+    background-color var(--duration-fast) var(--easing-standard),
+    border-color var(--duration-fast) var(--easing-standard);
+}
+
+.thumb {
+  position: absolute;
+  inset-block-start: 1px;
+  inset-inline-start: 1px;
+  width: var(--space-3);
+  height: var(--space-3);
+  border-radius: var(--radius-full);
+  background: var(--color-text-secondary);
+  transition:
+    transform var(--duration-fast) var(--easing-standard),
+    background-color var(--duration-fast) var(--easing-standard);
+}
+
+.button {
+  appearance: none;
+  background: none;
+  border: 0;
+  padding: var(--space-0);
+  margin: var(--space-0);
+  display: inline-flex;
+  cursor: inherit;
+  border-radius: var(--radius-full);
+}
+
+.button[aria-checked="true"] .track {
+  background: var(--color-brand);
+  border-color: var(--color-brand);
+}
+
+.button[aria-checked="true"] .thumb {
+  background: var(--color-brand-fg);
+  transform: translateX(var(--space-4));
+}

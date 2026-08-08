@@ -1,11 +1,23 @@
 import { execSync, spawn } from "node:child_process";
+import * as crypto from "node:crypto";
 import * as fs from "node:fs";
 import * as http from "node:http";
 import * as path from "node:path";
 import { fileURLToPath } from "node:url";
 
+import { buildAccountsReport } from "../cli/accounts.js";
+import { ACCOUNTS_DIR } from "../cli/constants.js";
+import { saveApiKeyAccount } from "../cli/login.js";
+import { runResetHwid } from "../cli/reset-hwid.js";
+import { writeAccountApiKey } from "./account-api-key.js";
 import type { BridgeConfig } from "./config.js";
-import { computeSessionStats, readLastLines } from "./session-log.js";
+import { runDoctor } from "./doctor.js";
+import { extractBearerToken } from "./http.js";
+import {
+  computeSessionStats,
+  readLastLines,
+  recentSessionRequests,
+} from "./session-log.js";
 
 const PLIST_LABEL = "com.cursor-api-proxy";
 
@@ -170,6 +182,11 @@ function sanitizedBridgeConfig(config: BridgeConfig): Record<string, unknown> {
     multiPort: config.multiPort,
     contextPreamble: config.contextPreamble,
     bridgePackageVersion: config.bridgePackageVersion,
+    maxConcurrentRuns: config.maxConcurrentRuns,
+    maxConcurrentRunsPerAccount: config.maxConcurrentRunsPerAccount,
+    sdkMaxConcurrentRuns: config.sdkMaxConcurrentRuns,
+    sdkMaxConcurrentRunsPerAccount: config.sdkMaxConcurrentRunsPerAccount,
+    admissionWaitMs: config.admissionWaitMs,
     contextExtraConfigured: Boolean(config.contextExtra),
   };
 }
@@ -216,6 +233,104 @@ function parseQuery(url: string): Record<string, string> {
   return out;
 }
 
+function isLoopbackAddress(addr: string | undefined): boolean {
+  if (!addr) return false;
+  const a = addr.trim().toLowerCase();
+  return (
+    a === "127.0.0.1" ||
+    a === "::1" ||
+    a === "localhost" ||
+    a === "::ffff:127.0.0.1"
+  );
+}
+
+function bearerMatches(requiredKey: string, req: http.IncomingMessage): boolean {
+  const token = extractBearerToken(req) ?? "";
+  const a = Buffer.from(token, "utf8");
+  const b = Buffer.from(requiredKey, "utf8");
+  return a.length === b.length && crypto.timingSafeEqual(a, b);
+}
+
+/**
+ * Mutating dashboard APIs and sensitive GETs:
+ * - when `requiredKey` is set → Bearer must match
+ * - when unset → allow only loopback clients
+ */
+export function authorizeDashboardApi(
+  req: http.IncomingMessage,
+  config: BridgeConfig,
+  kind: "mutate" | "sensitiveRead",
+): { ok: true } | { ok: false; status: number; error: string } {
+  if (config.requiredKey) {
+    if (!bearerMatches(config.requiredKey, req)) {
+      return {
+        ok: false,
+        status: 401,
+        error: "Authorization Bearer CURSOR_BRIDGE_API_KEY required",
+      };
+    }
+    return { ok: true };
+  }
+
+  if (kind === "mutate") {
+    const remote = req.socket?.remoteAddress;
+    if (!isLoopbackAddress(remote)) {
+      return {
+        ok: false,
+        status: 403,
+        error:
+          "Mutating dashboard APIs require CURSOR_BRIDGE_API_KEY when not on loopback",
+      };
+    }
+  }
+  return { ok: true };
+}
+
+function readJsonBody(
+  req: http.IncomingMessage,
+  cb: (err: Error | null, body: Record<string, unknown>) => void,
+): void {
+  let raw = "";
+  req.on("data", (c) => (raw += c));
+  req.on("end", () => {
+    try {
+      const body = JSON.parse(raw || "{}") as Record<string, unknown>;
+      cb(null, body && typeof body === "object" ? body : {});
+    } catch {
+      cb(new Error("invalid json"), {});
+    }
+  });
+  req.on("error", (err) => cb(err, {}));
+}
+
+function removeAccountDir(accountName: string): void {
+  const name = accountName.trim();
+  if (!name || name.includes("/") || name.includes("\\") || name === "." || name === "..") {
+    throw new Error("invalid account name");
+  }
+  const configDir = path.join(ACCOUNTS_DIR, name);
+  if (!fs.existsSync(configDir)) {
+    throw new Error(`Account '${name}' not found`);
+  }
+  fs.rmSync(configDir, { recursive: true, force: true });
+}
+
+function setAccountKey(accountName: string, apiKey: string): void {
+  const name = accountName.trim();
+  const key = apiKey.trim();
+  if (!name || !key) {
+    throw new Error("name and apiKey are required");
+  }
+  if (!key.startsWith("crsr_")) {
+    throw new Error("apiKey must look like a Dashboard API key (crsr_… prefix)");
+  }
+  const configDir = path.join(ACCOUNTS_DIR, name);
+  if (!fs.existsSync(configDir)) {
+    throw new Error(`Account '${name}' not found`);
+  }
+  writeAccountApiKey(configDir, key);
+}
+
 export type AdminDashboardOpts = {
   version: string;
   config: BridgeConfig;
@@ -227,8 +342,12 @@ export function adminDashboardMatches(req: http.IncomingMessage): boolean {
   if (req.method === "GET" && (pathname === "/" || pathname === "/wiki")) return true;
   if (req.method === "GET" && pathname.startsWith("/static/")) return true;
   if (req.method === "GET" && pathname.startsWith("/api/")) return true;
-  if (req.method === "POST" && pathname === "/api/control") return true;
-  if (req.method === "POST" && pathname === "/api/log/clear") return true;
+  if (
+    (req.method === "POST" || req.method === "PUT" || req.method === "DELETE") &&
+    pathname.startsWith("/api/")
+  ) {
+    return true;
+  }
   return false;
 }
 
@@ -245,11 +364,10 @@ export function handleAdminDashboard(
   const pathname = url.split("?")[0] ?? "/";
   const q = parseQuery(url);
 
-  if (req.method === "GET" && pathname === "/") {
-    return serveFile(res, path.join(publicDir, "index.html"));
-  }
-  if (req.method === "GET" && pathname === "/wiki") {
-    return serveFile(res, path.join(publicDir, "wiki.html"));
+  // `/` and `/wiki` serve the same React shell; the app picks the route from
+  // the hash (or from `/wiki` on first load) and renders client-side.
+  if (req.method === "GET" && (pathname === "/" || pathname === "/wiki")) {
+    return serveFile(res, path.join(publicDir, "dashboard", "index.html"));
   }
   if (req.method === "GET" && pathname.startsWith("/static/")) {
     const rel = pathname.slice("/static/".length);
@@ -261,6 +379,25 @@ export function handleAdminDashboard(
   if (req.method === "GET" && pathname === "/api/status") {
     return getStatus(config, version, (s) => json(res, 200, s));
   }
+
+  const sensitiveGet =
+    req.method === "GET" &&
+    (pathname === "/api/config" ||
+      pathname === "/api/accounts" ||
+      pathname === "/api/doctor" ||
+      pathname === "/api/requests");
+  if (sensitiveGet) {
+    const auth = authorizeDashboardApi(req, config, "sensitiveRead");
+    if (!auth.ok) return json(res, auth.status, { error: auth.error });
+  }
+
+  const isMutating =
+    req.method === "POST" || req.method === "PUT" || req.method === "DELETE";
+  if (isMutating && pathname.startsWith("/api/")) {
+    const auth = authorizeDashboardApi(req, config, "mutate");
+    if (!auth.ok) return json(res, auth.status, { error: auth.error });
+  }
+
   if (req.method === "GET" && pathname === "/api/config") {
     return json(res, 200, sanitizedBridgeConfig(config));
   }
@@ -272,7 +409,6 @@ export function handleAdminDashboard(
     });
   }
   if (req.method === "POST" && pathname === "/api/log/clear") {
-    // Archive+truncate the sessions log.
     const logPath = config.sessionsLogPath;
     const dir = path.dirname(logPath);
     try {
@@ -297,7 +433,6 @@ export function handleAdminDashboard(
       return json(res, 500, { error: msg });
     }
 
-    // Ensure dashboard polling continues to work immediately.
     try {
       fs.writeFileSync(logPath, "", "utf8");
     } catch (err) {
@@ -314,6 +449,101 @@ export function handleAdminDashboard(
       json(res, 200, computeSessionStats(lines, hours));
     });
   }
+  if (req.method === "GET" && pathname === "/api/accounts") {
+    void buildAccountsReport()
+      .then((report) => json(res, 200, report))
+      .catch((err) => {
+        const msg = err instanceof Error ? err.message : String(err);
+        json(res, 500, { error: msg });
+      });
+    return;
+  }
+  if (req.method === "POST" && pathname === "/api/accounts") {
+    return readJsonBody(req, (err, body) => {
+      if (err) return json(res, 400, { error: err.message });
+      const name = String(body.name ?? "").trim();
+      const apiKey = String(body.apiKey ?? "").trim();
+      if (!name || !apiKey) {
+        return json(res, 400, { error: "name and apiKey are required" });
+      }
+      try {
+        const saved = saveApiKeyAccount(name, apiKey);
+        // Never echo the raw key.
+        return json(res, 201, {
+          ok: true,
+          name: saved.name,
+          configDir: saved.configDir,
+        });
+      } catch (e) {
+        const msg = e instanceof Error ? e.message : String(e);
+        return json(res, 400, { error: msg });
+      }
+    });
+  }
+  if (req.method === "DELETE" && pathname.startsWith("/api/accounts/")) {
+    const name = decodeURIComponent(pathname.slice("/api/accounts/".length));
+    try {
+      removeAccountDir(name);
+      return json(res, 200, { ok: true, name });
+    } catch (e) {
+      const msg = e instanceof Error ? e.message : String(e);
+      const status = /not found/i.test(msg) ? 404 : 400;
+      return json(res, status, { error: msg });
+    }
+  }
+  if (req.method === "PUT" && pathname.startsWith("/api/accounts/") && pathname.endsWith("/key")) {
+    const mid = pathname.slice("/api/accounts/".length, -"/key".length);
+    const name = decodeURIComponent(mid.replace(/\/$/, ""));
+    return readJsonBody(req, (err, body) => {
+      if (err) return json(res, 400, { error: err.message });
+      const apiKey = String(body.apiKey ?? "").trim();
+      try {
+        setAccountKey(name, apiKey);
+        return json(res, 200, { ok: true, name });
+      } catch (e) {
+        const msg = e instanceof Error ? e.message : String(e);
+        const status = /not found/i.test(msg) ? 404 : 400;
+        return json(res, status, { error: msg });
+      }
+    });
+  }
+  if (req.method === "GET" && pathname === "/api/doctor") {
+    try {
+      const result = runDoctor(config, process.env);
+      return json(res, 200, result);
+    } catch (e) {
+      const msg = e instanceof Error ? e.message : String(e);
+      return json(res, 500, { error: msg });
+    }
+  }
+  if (req.method === "POST" && pathname === "/api/reset-hwid") {
+    return readJsonBody(req, (err, body) => {
+      if (err) return json(res, 400, { error: err.message });
+      const deepClean = Boolean(body.deepClean);
+      void runResetHwid({ deepClean })
+        .then((result) =>
+          json(res, 200, {
+            ok: true,
+            deepClean: result.deepClean,
+            // Do not return raw machine ids to the browser by default.
+          }),
+        )
+        .catch((e) => {
+          const msg = e instanceof Error ? e.message : String(e);
+          json(res, 500, { error: msg });
+        });
+    });
+  }
+  if (req.method === "GET" && pathname === "/api/requests") {
+    const limit = Math.min(200, Math.max(1, Number(q.limit) || 40));
+    return readLastLines(config.sessionsLogPath, 20_000, (err, lines) => {
+      if (err) return json(res, 500, { error: String(err) });
+      json(res, 200, {
+        path: config.sessionsLogPath,
+        requests: recentSessionRequests(lines, limit),
+      });
+    });
+  }
   if (req.method === "GET" && pathname === "/api/wiki") {
     fs.readFile(wikiFile, "utf8", (err, data) => {
       if (err) return json(res, 500, { error: "wiki not readable" });
@@ -326,21 +556,13 @@ export function handleAdminDashboard(
     return;
   }
   if (req.method === "POST" && pathname === "/api/control") {
-    let raw = "";
-    req.on("data", (c) => (raw += c));
-    req.on("end", () => {
-      let body: { action?: string } = {};
-      try {
-        body = JSON.parse(raw || "{}") as { action?: string };
-      } catch {
-        return json(res, 400, { error: "invalid json" });
-      }
-      runControl(String(body.action ?? ""), config, (err, result) => {
-        if (err) return json(res, 400, { error: err.message });
+    return readJsonBody(req, (err, body) => {
+      if (err) return json(res, 400, { error: err.message });
+      runControl(String(body.action ?? ""), config, (ctrlErr, result) => {
+        if (ctrlErr) return json(res, 400, { error: ctrlErr.message });
         json(res, 200, result);
       });
     });
-    return;
   }
 
   notFound(res);

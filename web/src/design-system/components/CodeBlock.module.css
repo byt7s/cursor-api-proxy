@@ -1,0 +1,32 @@
+.root {
+  position: relative;
+  background: var(--color-surface-sunken);
+  border: var(--border-width) solid var(--color-border);
+  border-radius: var(--radius-md);
+  overflow: hidden;
+}
+
+.pre {
+  margin: var(--space-0);
+  padding: var(--space-3);
+  overflow-x: auto;
+  font-size: var(--font-size-sm);
+  line-height: var(--line-height-relaxed);
+  color: var(--color-text);
+}
+
+.inline {
+  display: inline;
+  background: var(--color-neutral-bg);
+  border: var(--border-width) solid var(--color-neutral-border);
+  border-radius: var(--radius-sm);
+  padding-inline: var(--space-1);
+  font-size: var(--font-size-sm);
+  color: var(--color-text-secondary);
+}
+
+.copy {
+  position: absolute;
+  inset-block-start: var(--space-2);
+  inset-inline-end: var(--space-2);
+}

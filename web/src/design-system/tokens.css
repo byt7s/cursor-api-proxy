@@ -1,0 +1,294 @@
+/*
+ * Design tokens — the single source of truth for every visual value.
+ *
+ * Components must only reference these custom properties; a raw hex colour or
+ * magic pixel value anywhere outside this file is a bug. Numeric mirrors that
+ * TypeScript needs (spacing, breakpoints, z-index, durations) live in
+ * `tokens.ts` and must be kept in sync with the values below.
+ *
+ * Dark is the default theme; `[data-theme="light"]` overrides the colour layer
+ * only. Everything else (spacing, radii, type, motion) is theme independent.
+ */
+
+:root {
+  /* --- Color: background layers ------------------------------------------ */
+  --color-bg: #0d1117;
+  --color-surface: #161b22;
+  --color-surface-raised: #1c2430;
+  --color-surface-sunken: #010409;
+  --color-overlay: rgb(1 4 9 / 72%);
+
+  /* --- Color: borders ----------------------------------------------------- */
+  --color-border: #30363d;
+  --color-border-subtle: #21262d;
+  --color-border-strong: #484f58;
+
+  /* --- Color: text -------------------------------------------------------- */
+  --color-text: #e6edf3;
+  --color-text-secondary: #9da7b3;
+  --color-text-muted: #6e7681;
+  --color-text-inverse: #0d1117;
+
+  /* --- Color: brand / accent ---------------------------------------------- */
+  --color-brand: #58a6ff;
+  --color-brand-hover: #79b8ff;
+  --color-brand-fg: #0d1117;
+  --color-brand-bg: rgb(88 166 255 / 14%);
+  --color-brand-border: rgb(88 166 255 / 40%);
+  --color-accent: #bc8cff;
+
+  /* --- Color: semantic ---------------------------------------------------- */
+  --color-success: #3fb950;
+  --color-success-fg: #56d364;
+  --color-success-bg: rgb(63 185 80 / 14%);
+  --color-success-border: rgb(63 185 80 / 40%);
+
+  --color-warning: #d29922;
+  --color-warning-fg: #e3b341;
+  --color-warning-bg: rgb(210 153 34 / 14%);
+  --color-warning-border: rgb(210 153 34 / 40%);
+
+  --color-danger: #f85149;
+  --color-danger-fg: #ff7b72;
+  --color-danger-bg: rgb(248 81 73 / 14%);
+  --color-danger-border: rgb(248 81 73 / 40%);
+
+  --color-info: #58a6ff;
+  --color-info-fg: #79c0ff;
+  --color-info-bg: rgb(88 166 255 / 14%);
+  --color-info-border: rgb(88 166 255 / 40%);
+
+  --color-neutral-fg: #9da7b3;
+  --color-neutral-bg: rgb(110 118 129 / 16%);
+  --color-neutral-border: rgb(110 118 129 / 36%);
+
+  /* --- Color: interaction ------------------------------------------------- */
+  --color-focus-ring: #58a6ff;
+  --color-hover-overlay: rgb(177 186 196 / 10%);
+  --color-active-overlay: rgb(177 186 196 / 16%);
+  --color-selected-bg: rgb(88 166 255 / 12%);
+
+  /* --- Spacing (4px base) ------------------------------------------------- */
+  --space-0: 0;
+  --space-1: 4px;
+  --space-2: 8px;
+  --space-3: 12px;
+  --space-4: 16px;
+  --space-5: 20px;
+  --space-6: 24px;
+  --space-7: 28px;
+  --space-8: 32px;
+  --space-10: 40px;
+  --space-12: 48px;
+  --space-14: 56px;
+  --space-16: 64px;
+
+  /* --- Radii -------------------------------------------------------------- */
+  --radius-sm: 4px;
+  --radius-md: 8px;
+  --radius-lg: 12px;
+  --radius-full: 999px;
+
+  /* --- Shadows ------------------------------------------------------------ */
+  --shadow-sm: 0 1px 2px rgb(1 4 9 / 40%);
+  --shadow-md: 0 4px 12px rgb(1 4 9 / 48%);
+  --shadow-lg: 0 16px 40px rgb(1 4 9 / 60%);
+
+  /* --- Typography: families ----------------------------------------------- */
+  --font-family-sans: -apple-system, BlinkMacSystemFont, "Segoe UI", Inter,
+    Roboto, "Helvetica Neue", Arial, sans-serif;
+  --font-family-mono: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas,
+    "Liberation Mono", monospace;
+
+  /* --- Typography: sizes -------------------------------------------------- */
+  --font-size-xs: 11px;
+  --font-size-sm: 12px;
+  --font-size-md: 14px;
+  --font-size-lg: 16px;
+  --font-size-xl: 20px;
+  --font-size-2xl: 24px;
+  --font-size-3xl: 32px;
+
+  /* --- Typography: line heights / weights / tracking ---------------------- */
+  --line-height-tight: 1.2;
+  --line-height-normal: 1.5;
+  --line-height-relaxed: 1.7;
+
+  --font-weight-regular: 400;
+  --font-weight-medium: 500;
+  --font-weight-semibold: 600;
+  --font-weight-bold: 700;
+
+  --letter-spacing-tight: -0.01em;
+  --letter-spacing-normal: 0;
+  --letter-spacing-wide: 0.04em;
+
+  /* --- Sizes -------------------------------------------------------------- */
+  --control-h-sm: 26px;
+  --control-h-md: 32px;
+  --control-h-lg: 40px;
+  --icon-size-sm: 14px;
+  --icon-size-md: 16px;
+  --icon-size-lg: 20px;
+  --sidebar-width: 232px;
+  --sidebar-width-collapsed: 60px;
+  --header-height: 52px;
+  --container-max-width: 1280px;
+  --border-width: 1px;
+
+  /* --- Z-index scale ------------------------------------------------------ */
+  --z-base: 0;
+  --z-sticky: 100;
+  --z-sidebar: 200;
+  --z-dropdown: 300;
+  --z-overlay: 400;
+  --z-modal: 500;
+  --z-toast: 600;
+  --z-tooltip: 700;
+
+  /* --- Motion ------------------------------------------------------------- */
+  --duration-instant: 80ms;
+  --duration-fast: 120ms;
+  --duration-normal: 200ms;
+  --duration-slow: 320ms;
+  --easing-standard: cubic-bezier(0.2, 0, 0, 1);
+  --easing-decelerate: cubic-bezier(0, 0, 0, 1);
+  --easing-accelerate: cubic-bezier(0.3, 0, 1, 1);
+
+  /*
+   * --- Breakpoints -------------------------------------------------------
+   * Documented as constants only: custom properties cannot be used inside
+   * `@media` queries, so media queries repeat these literals and `tokens.ts`
+   * exposes them to TypeScript.
+   *   sm 640px · md 768px · lg 1024px · xl 1280px
+   */
+  --breakpoint-sm: 640px;
+  --breakpoint-md: 768px;
+  --breakpoint-lg: 1024px;
+  --breakpoint-xl: 1280px;
+}
+
+[data-theme="light"] {
+  --color-bg: #ffffff;
+  --color-surface: #f6f8fa;
+  --color-surface-raised: #ffffff;
+  --color-surface-sunken: #eaeef2;
+  --color-overlay: rgb(31 35 40 / 40%);
+
+  --color-border: #d0d7de;
+  --color-border-subtle: #e4e8ed;
+  --color-border-strong: #8c959f;
+
+  --color-text: #1f2328;
+  --color-text-secondary: #59636e;
+  --color-text-muted: #818b98;
+  --color-text-inverse: #ffffff;
+
+  --color-brand: #0969da;
+  --color-brand-hover: #0550ae;
+  --color-brand-fg: #ffffff;
+  --color-brand-bg: rgb(9 105 218 / 10%);
+  --color-brand-border: rgb(9 105 218 / 36%);
+  --color-accent: #8250df;
+
+  --color-success: #1a7f37;
+  --color-success-fg: #1a7f37;
+  --color-success-bg: rgb(26 127 55 / 10%);
+  --color-success-border: rgb(26 127 55 / 32%);
+
+  --color-warning: #9a6700;
+  --color-warning-fg: #9a6700;
+  --color-warning-bg: rgb(154 103 0 / 10%);
+  --color-warning-border: rgb(154 103 0 / 32%);
+
+  --color-danger: #cf222e;
+  --color-danger-fg: #cf222e;
+  --color-danger-bg: rgb(207 34 46 / 10%);
+  --color-danger-border: rgb(207 34 46 / 32%);
+
+  --color-info: #0969da;
+  --color-info-fg: #0969da;
+  --color-info-bg: rgb(9 105 218 / 10%);
+  --color-info-border: rgb(9 105 218 / 32%);
+
+  --color-neutral-fg: #59636e;
+  --color-neutral-bg: rgb(129 139 152 / 12%);
+  --color-neutral-border: rgb(129 139 152 / 32%);
+
+  --color-focus-ring: #0969da;
+  --color-hover-overlay: rgb(31 35 40 / 6%);
+  --color-active-overlay: rgb(31 35 40 / 10%);
+  --color-selected-bg: rgb(9 105 218 / 8%);
+
+  --shadow-sm: 0 1px 2px rgb(31 35 40 / 8%);
+  --shadow-md: 0 4px 12px rgb(31 35 40 / 12%);
+  --shadow-lg: 0 16px 40px rgb(31 35 40 / 18%);
+}
+
+/* --- Base element resets ------------------------------------------------- */
+
+*,
+*::before,
+*::after {
+  box-sizing: border-box;
+}
+
+html,
+body,
+#root {
+  height: 100%;
+}
+
+body {
+  margin: 0;
+  background: var(--color-bg);
+  color: var(--color-text);
+  font-family: var(--font-family-sans);
+  font-size: var(--font-size-md);
+  line-height: var(--line-height-normal);
+  -webkit-font-smoothing: antialiased;
+}
+
+:focus-visible {
+  outline: 2px solid var(--color-focus-ring);
+  outline-offset: 2px;
+  border-radius: var(--radius-sm);
+}
+
+a {
+  color: var(--color-brand);
+  text-decoration: none;
+}
+
+a:hover {
+  text-decoration: underline;
+}
+
+code,
+pre,
+kbd {
+  font-family: var(--font-family-mono);
+}
+
+/** Visually hidden but still announced by screen readers. */
+.sr-only {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip-path: inset(50%);
+  white-space: nowrap;
+  border: 0;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+  }
+}

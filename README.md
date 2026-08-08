@@ -33,8 +33,27 @@ npm install cursor-api-proxy
 git clone <this-repo>
 cd cursor-api-proxy
 npm install
-npm run build
+npm run build      # builds the React dashboard, then the TypeScript server
 ```
+
+`npm run build` runs `build:web` (Vite → `public/dashboard/`) followed by
+`tsc`. The built dashboard assets are **committed**, so installing from npm or
+straight from git works without a frontend build step. When iterating on the UI:
+
+```bash
+npm run build:web  # one-off production build of web/ into public/dashboard/
+npm run dev:web    # Vite dev server (proxy the /api routes to a running proxy)
+npm run typecheck  # server + dashboard type checks
+npm test           # Node server suite + jsdom dashboard suite
+```
+
+The dashboard source lives in `web/` (React + TypeScript, with the design
+system under `web/src/design-system/`). Open it at
+**http://127.0.0.1:8765/** — status, accounts, requests, logs, config,
+diagnostics, wiki and settings, with a dark/light theme toggle. When the proxy
+runs with `CURSOR_BRIDGE_API_KEY`, paste that value into **Settings → Dashboard
+key**; it is kept in `sessionStorage` for the tab and sent as
+`Authorization: Bearer`.
 
 ## Run the proxy (CLI)
 
