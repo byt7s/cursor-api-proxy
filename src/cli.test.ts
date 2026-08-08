@@ -17,14 +17,13 @@ describe("parseArgs", () => {
     resetHwid: false,
     deepClean: false,
     dryRun: false,
+    doctor: false,
     verbose: false,
     requests: false,
     requestLimit: 20,
     watch: false,
     watchIntervalMs: 2000,
     mode: undefined as undefined,
-    setKey: false,
-    apiKey: "",
   };
 
   it("parses empty argv", () => {
@@ -179,17 +178,16 @@ describe("parseArgs", () => {
     });
   });
 
-  it("parses set-key with account and key positionals", () => {
-    expect(parseArgs(["set-key", "acc8", "crsr_abc123"])).toEqual({
+  it("parses doctor", () => {
+    expect(parseArgs(["doctor"])).toEqual({
       ...base,
+      doctor: true,
       tailscale: false,
       help: false,
       login: false,
       logout: false,
       accountsList: false,
-      setKey: true,
-      accountName: "acc8",
-      apiKey: "crsr_abc123",
+      accountName: "",
       proxies: [],
     });
   });
