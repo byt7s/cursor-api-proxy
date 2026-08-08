@@ -22,6 +22,12 @@ import {
 } from "../admission.js";
 import { runAgentStream, runAgentSync } from "../agent-runner.js";
 import { createStreamParser } from "../cli-stream-parser.js";
+import {
+  IMAGES_NOT_SUPPORTED_CODE,
+  IMAGES_NOT_SUPPORTED_MESSAGE,
+  responsesInputContainsImages,
+  stripImagesFromResponsesInput,
+} from "../image-content.js";
 import { resolveModelWithoutCatalog } from "../model-map.js";
 import {
   buildPromptFromMessages,
@@ -193,8 +199,29 @@ export async function handleResponses(
       ? config.defaultModel
       : model;
 
-  const cleanMessages = sanitizeMessages(responsesInputToMessages(body));
-  const toolsText = toolsToSystemText(body.tools);
+  let requestBody = body;
+  if (responsesInputContainsImages(body.input)) {
+    if (!config.ignoreImages) {
+      json(res, 400, {
+        error: {
+          message: IMAGES_NOT_SUPPORTED_MESSAGE,
+          code: IMAGES_NOT_SUPPORTED_CODE,
+        },
+      });
+      return;
+    }
+    console.warn(
+      "[images] stripping image parts (CURSOR_BRIDGE_IGNORE_IMAGES=true)",
+    );
+    res.setHeader("X-Cursor-Proxy-Images-Ignored", "true");
+    requestBody = {
+      ...body,
+      input: stripImagesFromResponsesInput(body.input) as typeof body.input,
+    };
+  }
+
+  const cleanMessages = sanitizeMessages(responsesInputToMessages(requestBody));
+  const toolsText = toolsToSystemText(requestBody.tools);
   const messagesWithTools = toolsText
     ? [{ role: "system", content: toolsText }, ...cleanMessages]
     : cleanMessages;

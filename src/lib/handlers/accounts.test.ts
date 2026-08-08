@@ -90,6 +90,7 @@ function createTestConfig(overrides: Partial<BridgeConfig> = {}): BridgeConfig {
     latencyWaterfall: false,
     thoughtMode: "drop",
     toolCalls: false,
+    ignoreImages: false,
     maxConcurrentRuns: 16,
     maxConcurrentRunsPerAccount: 2,
     admissionWaitMs: 0,

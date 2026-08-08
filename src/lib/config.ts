@@ -125,8 +125,10 @@ export type BridgeConfig = {
    * drop (default) or map to OpenAI reasoning_content.
    */
   thoughtMode: "drop" | "reasoning";
-  /** Bridge textual tool output to OpenAI tool_calls (CURSOR_BRIDGE_TOOL_CALLS). */
+  /** Bridge textual tool output to OpenAI tool_calls / Anthropic tool_use. */
   toolCalls: boolean;
+  /** Strip image parts instead of rejecting (CURSOR_BRIDGE_IGNORE_IMAGES). */
+  ignoreImages: boolean;
 };
 
 export function loadBridgeConfig(opts: EnvOptions = {}): BridgeConfig {
@@ -211,5 +213,6 @@ export function loadBridgeConfig(opts: EnvOptions = {}): BridgeConfig {
     latencyWaterfall: env.latencyWaterfall,
     thoughtMode: env.thoughtMode,
     toolCalls: env.toolCalls,
+    ignoreImages: env.ignoreImages,
   };
 }

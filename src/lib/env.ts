@@ -146,10 +146,16 @@ export type LoadedEnv = {
    */
   thoughtMode: "drop" | "reasoning";
   /**
-   * When true, parse model tool-call JSON into OpenAI message.tool_calls.
+   * When true, parse model tool-call JSON into OpenAI message.tool_calls
+   * (and Anthropic tool_use blocks on /v1/messages).
    * Default false (safe). See CURSOR_BRIDGE_TOOL_CALLS.
    */
   toolCalls: boolean;
+  /**
+   * When true, strip image parts and continue text-only instead of rejecting
+   * with `images_not_supported`. Default false. See CURSOR_BRIDGE_IGNORE_IMAGES.
+   */
+  ignoreImages: boolean;
 };
 
 export type AgentCommand = {
@@ -633,6 +639,7 @@ export function loadEnvConfig(opts: EnvOptions = {}): LoadedEnv {
     latencyWaterfall: envBool(env, ["CURSOR_BRIDGE_LATENCY_WATERFALL"], true),
     thoughtMode: envThoughtMode(env, ["CURSOR_BRIDGE_THOUGHT_MODE"], "drop"),
     toolCalls: envBool(env, ["CURSOR_BRIDGE_TOOL_CALLS"], false),
+    ignoreImages: envBool(env, ["CURSOR_BRIDGE_IGNORE_IMAGES"], false),
   };
 }
 

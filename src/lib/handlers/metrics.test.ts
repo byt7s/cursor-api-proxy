@@ -79,6 +79,7 @@ function createTestConfig(overrides: Partial<BridgeConfig> = {}): BridgeConfig {
     latencyWaterfall: false,
     thoughtMode: "drop",
     toolCalls: false,
+    ignoreImages: false,
     ...overrides,
   };
 }

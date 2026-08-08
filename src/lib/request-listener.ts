@@ -225,11 +225,16 @@ export function createRequestListener(opts: BridgeServerOptions) {
             code: "not_found",
           },
         });
-      } else if (pathname === "/v1/embeddings") {
-        json(res, 404, {
+      } else if (
+        (req.method === "POST" || req.method === "GET") &&
+        pathname === "/v1/embeddings"
+      ) {
+        json(res, 501, {
           error: {
-            message: "Embeddings are not supported by this proxy.",
-            code: "not_found",
+            message:
+              "Embeddings are not supported by this Cursor bridge — it only proxies chat/completions-style agent runs, not embedding vectors.",
+            code: "embeddings_not_supported",
+            type: "not_supported_error",
           },
         });
       } else {

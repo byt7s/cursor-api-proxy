@@ -19,6 +19,12 @@ import type { BridgeConfig } from "../config.js";
 import type { CursorExecutionMode } from "../execution-mode.js";
 import type { ModelCacheRef } from "./models.js";
 import { json, writeSseHeaders } from "../http.js";
+import {
+  IMAGES_NOT_SUPPORTED_CODE,
+  IMAGES_NOT_SUPPORTED_MESSAGE,
+  messagesContainImages,
+  stripImagesFromMessages,
+} from "../image-content.js";
 import { resolveModelWithoutCatalog } from "../model-map.js";
 import { normalizeModelId, toolsToSystemText } from "../openai.js";
 import {
@@ -40,6 +46,11 @@ import {
   runStreamWithAccountFailover,
   runSyncWithAccountFailover,
 } from "../account-failover.js";
+import {
+  buildToolBridgeSystemText,
+  resolveAnthropicAssistantOutput,
+  shouldUseToolBridge,
+} from "../tool-calls.js";
 import {
   fitPromptToWinCmdline,
   warnPromptTruncated,
@@ -79,11 +90,38 @@ export async function handleAnthropicMessages(
       : model;
 
   const cleanSystem = sanitizeSystem(body.system);
-  const cleanMessages = sanitizeMessages(
+  let cleanMessages = sanitizeMessages(
     body.messages ?? [],
   ) as AnthropicMessagesRequest["messages"];
 
-  const toolsText = toolsToSystemText((body as any).tools);
+  if (messagesContainImages(cleanMessages)) {
+    if (!config.ignoreImages) {
+      json(res, 400, {
+        error: {
+          type: "invalid_request_error",
+          message: IMAGES_NOT_SUPPORTED_MESSAGE,
+          code: IMAGES_NOT_SUPPORTED_CODE,
+        },
+      });
+      return;
+    }
+    console.warn(
+      "[images] stripping image blocks (CURSOR_BRIDGE_IGNORE_IMAGES=true)",
+    );
+    cleanMessages = stripImagesFromMessages(cleanMessages);
+  }
+
+  const toolBridgeActive =
+    config.toolCalls &&
+    shouldUseToolBridge((body as any).tools, (body as any).tool_choice);
+  const toolsText = config.toolCalls
+    ? toolBridgeActive
+      ? buildToolBridgeSystemText(
+          (body as any).tools,
+          (body as any).tool_choice,
+        )
+      : undefined
+    : toolsToSystemText((body as any).tools);
   const systemWithTools = toolsText
     ? [cleanSystem, toolsText].filter(Boolean).join("\n\n")
     : cleanSystem;
@@ -262,6 +300,30 @@ export async function handleAnthropicMessages(
         accumulated,
         true,
       );
+      if (toolBridgeActive) {
+        const shaped = resolveAnthropicAssistantOutput(
+          accumulated,
+          (body as any).tools,
+          { toolChoice: (body as any).tool_choice },
+        );
+        if (shaped.kind === "tool_use") {
+          // Buffered tool path: replace the empty text block with tool_use.
+          writeEvent({ type: "content_block_stop", index: 0 });
+          writeEvent({
+            type: "content_block_start",
+            index: 1,
+            content_block: shaped.content[0],
+          });
+          writeEvent({ type: "content_block_stop", index: 1 });
+          writeEvent({
+            type: "message_delta",
+            delta: { stop_reason: "tool_use", stop_sequence: null },
+            usage: { output_tokens: 0 },
+          });
+          writeEvent({ type: "message_stop" });
+          return;
+        }
+      }
       writeEvent({ type: "content_block_stop", index: 0 });
       writeEvent({
         type: "message_delta",
@@ -279,6 +341,7 @@ export async function handleAnthropicMessages(
           onCommit: ensureHeaders,
           onChunk: (chunk) => {
             accumulated += chunk;
+            if (toolBridgeActive) return;
             writeEvent({
               type: "content_block_delta",
               index: 0,
@@ -414,6 +477,7 @@ export async function handleAnthropicMessages(
         onCommit: ensureHeaders,
         onChunk: (text) => {
           accumulated += text;
+          if (toolBridgeActive) return;
           writeEvent({
             type: "content_block_delta",
             index: 0,
@@ -587,6 +651,15 @@ export async function handleAnthropicMessages(
   logAccountStats(config.verbose, getAccountStats());
   const inTok = Math.max(1, Math.round(agentPrompt.length / 4));
   const outTok = Math.max(1, Math.round(content.length / 4));
+  const shaped = toolBridgeActive
+    ? resolveAnthropicAssistantOutput(content, (body as any).tools, {
+        toolChoice: (body as any).tool_choice,
+      })
+    : {
+        kind: "text" as const,
+        content,
+        stop_reason: "end_turn" as const,
+      };
   json(
     res,
     200,
@@ -594,9 +667,12 @@ export async function handleAnthropicMessages(
       id: msgId,
       type: "message",
       role: "assistant",
-      content: [{ type: "text", text: content }],
+      content:
+        shaped.kind === "tool_use"
+          ? shaped.content
+          : [{ type: "text", text: shaped.content }],
       model: displayModel ?? cursorModel,
-      stop_reason: "end_turn",
+      stop_reason: shaped.stop_reason,
       usage: {
         input_tokens: inTok,
         output_tokens: outTok,

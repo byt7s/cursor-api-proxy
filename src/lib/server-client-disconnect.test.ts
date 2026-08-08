@@ -81,6 +81,7 @@ function createTestConfig(
     latencyWaterfall: true,
     thoughtMode: "drop",
     toolCalls: false,
+    ignoreImages: false,
     ...overrides,
   };
 }
