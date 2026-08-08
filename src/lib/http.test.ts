@@ -35,6 +35,19 @@ describe("extractBearerToken", () => {
     expect(extractBearerToken(req)).toBeUndefined();
   });
 
+  it("falls back to x-api-key when Authorization is missing", () => {
+    const req = mockRequest({ "x-api-key": "sk-from-header" });
+    expect(extractBearerToken(req)).toBe("sk-from-header");
+  });
+
+  it("prefers Authorization Bearer over x-api-key", () => {
+    const req = mockRequest({
+      authorization: "Bearer sk-bearer",
+      "x-api-key": "sk-header",
+    });
+    expect(extractBearerToken(req)).toBe("sk-bearer");
+  });
+
   it("handles array Authorization header", () => {
     const req = mockRequest({ authorization: ["Bearer token-from-array"] });
     expect(extractBearerToken(req)).toBe("token-from-array");
