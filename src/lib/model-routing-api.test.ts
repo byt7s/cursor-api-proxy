@@ -9,10 +9,14 @@ import * as path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { EMPTY_CONFIG_FILE_STATE } from "./config-file.js";
-import { writeAccountAllowedModels } from "./account-models.js";
+import {
+  MODELS_FILE,
+  writeAccountAllowedModels,
+} from "./account-models.js";
 import type { BridgeConfig } from "./config.js";
 import { initAccountPool } from "./account-pool.js";
 import { startBridgeServer } from "./server.js";
+import { run } from "./process.js";
 
 const { accountsDir } = vi.hoisted(() => {
   const fs = require("node:fs") as typeof import("node:fs");
@@ -33,7 +37,11 @@ vi.mock("./cursor-cli.js", () => ({
 
 vi.mock("./process.js", () => ({
   killAllChildProcesses: vi.fn(),
-  run: vi.fn().mockResolvedValue({ code: 0, stdout: "ok", stderr: "" }),
+  run: vi.fn().mockResolvedValue({
+    code: 0,
+    stdout: "Hello from agent",
+    stderr: "",
+  }),
   runStreaming: vi.fn().mockResolvedValue({ code: 0, stderr: "" }),
 }));
 
@@ -256,6 +264,164 @@ describe("model routing HTTP", () => {
         allowedModels: ["composer-2", "sonnet-4.6"],
         unrestricted: false,
       });
+    } finally {
+      await new Promise<void>((resolve) => server.close(() => resolve()));
+    }
+  });
+
+  it("resolves gpt-4o → composer-2 when the allowlist permits the target", async () => {
+    const work = path.join(accountsDir, "work");
+    fs.mkdirSync(work, { recursive: true });
+    writeAccountAllowedModels(work, ["composer-2"]);
+    initAccountPool([work]);
+    vi.mocked(run).mockClear();
+
+    const server = await start(
+      createTestConfig({
+        modelAliases: { "gpt-4o": "composer-2" },
+        configDirs: [work],
+      }),
+    );
+    try {
+      const res = await fetchServer(server, "/v1/chat/completions", {
+        method: "POST",
+        body: {
+          model: "gpt-4o",
+          messages: [{ role: "user", content: "hi" }],
+        },
+      });
+      expect(res.status).toBe(200);
+      expect(res.json).toMatchObject({
+        choices: [{ message: { content: "Hello from agent" } }],
+      });
+      expect(run).toHaveBeenCalled();
+      const args = vi.mocked(run).mock.calls[0]![1] as string[];
+      expect(args.join(" ")).toContain("composer-2");
+    } finally {
+      await new Promise<void>((resolve) => server.close(() => resolve()));
+    }
+  });
+
+  it("returns 403 with the resolved model id when an alias target is not allowed", async () => {
+    const work = path.join(accountsDir, "work");
+    fs.mkdirSync(work, { recursive: true });
+    writeAccountAllowedModels(work, ["sonnet-4.6"]);
+    initAccountPool([work]);
+
+    const server = await start(
+      createTestConfig({
+        modelAliases: { "gpt-4o": "composer-2" },
+        configDirs: [work],
+      }),
+    );
+    try {
+      const res = await fetchServer(server, "/v1/chat/completions", {
+        method: "POST",
+        body: {
+          model: "gpt-4o",
+          messages: [{ role: "user", content: "hi" }],
+        },
+      });
+      expect(res.status).toBe(403);
+      expect(res.json).toMatchObject({
+        error: {
+          code: "model_not_allowed_for_any_account",
+          model: "composer-2",
+        },
+      });
+      expect(JSON.stringify(res.json)).not.toContain("gpt-4o");
+    } finally {
+      await new Promise<void>((resolve) => server.close(() => resolve()));
+    }
+  });
+
+  it("returns the same invalid-alias and not-allowed errors on /v1/messages and /v1/responses", async () => {
+    const work = path.join(accountsDir, "work");
+    fs.mkdirSync(work, { recursive: true });
+    writeAccountAllowedModels(work, ["sonnet-4.6"]);
+    initAccountPool([work]);
+
+    const server = await start(
+      createTestConfig({
+        modelAliases: { broken: "", "gpt-4o": "composer-2" },
+        configDirs: [work],
+      }),
+    );
+    try {
+      for (const route of ["/v1/messages", "/v1/responses"] as const) {
+        const invalidBody =
+          route === "/v1/messages"
+            ? {
+                model: "broken",
+                max_tokens: 16,
+                messages: [{ role: "user", content: "hi" }],
+              }
+            : {
+                model: "broken",
+                input: "hi",
+              };
+        const invalid = await fetchServer(server, route, {
+          method: "POST",
+          body: invalidBody,
+        });
+        expect(invalid.status).toBe(400);
+        expect(invalid.json).toMatchObject({
+          error: { code: "invalid_model_alias", alias: "broken" },
+        });
+
+        const deniedBody =
+          route === "/v1/messages"
+            ? {
+                model: "gpt-4o",
+                max_tokens: 16,
+                messages: [{ role: "user", content: "hi" }],
+              }
+            : {
+                model: "gpt-4o",
+                input: "hi",
+              };
+        const denied = await fetchServer(server, route, {
+          method: "POST",
+          body: deniedBody,
+        });
+        expect(denied.status).toBe(403);
+        expect(denied.json).toMatchObject({
+          error: {
+            code: "model_not_allowed_for_any_account",
+            model: "composer-2",
+          },
+        });
+      }
+    } finally {
+      await new Promise<void>((resolve) => server.close(() => resolve()));
+    }
+  });
+
+  it("PUT allowedModels: [] clears the file and marks the account unrestricted", async () => {
+    const work = path.join(accountsDir, "work");
+    fs.mkdirSync(work, { recursive: true });
+    writeAccountAllowedModels(work, ["composer-2"]);
+    expect(fs.existsSync(path.join(work, MODELS_FILE))).toBe(true);
+
+    const server = await start(
+      createTestConfig({
+        dashboardKey: "dash-secret",
+        configDirs: [work],
+      }),
+    );
+    try {
+      const res = await fetchServer(server, "/api/accounts/work/models", {
+        method: "PUT",
+        headers: { Authorization: "Bearer dash-secret" },
+        body: { allowedModels: [] },
+      });
+      expect(res.status).toBe(200);
+      expect(res.json).toMatchObject({
+        ok: true,
+        allowedModels: [],
+        unrestricted: true,
+      });
+      expect(fs.existsSync(path.join(work, MODELS_FILE))).toBe(false);
     } finally {
       await new Promise<void>((resolve) => server.close(() => resolve()));
     }

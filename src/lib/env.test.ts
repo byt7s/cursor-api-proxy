@@ -148,6 +148,28 @@ describe("loadEnvConfig", () => {
     ).toBe(true);
   });
 
+  it("parses CURSOR_BRIDGE_MODEL_ALIASES JSON object", () => {
+    expect(loadEnvConfig({ env: {} }).modelAliases).toEqual({});
+    expect(
+      loadEnvConfig({
+        env: {
+          CURSOR_BRIDGE_MODEL_ALIASES: JSON.stringify({
+            "gpt-4o": "composer-2",
+            "claude-sonnet": "sonnet-4.6",
+          }),
+        },
+      }).modelAliases,
+    ).toEqual({
+      "gpt-4o": "composer-2",
+      "claude-sonnet": "sonnet-4.6",
+    });
+    expect(() =>
+      loadEnvConfig({
+        env: { CURSOR_BRIDGE_MODEL_ALIASES: "not-json" },
+      }),
+    ).toThrow(/CURSOR_BRIDGE_MODEL_ALIASES/);
+  });
+
   it("parses CURSOR_BRIDGE_MODE and marks chat-only env as explicit", () => {
     const loaded = loadEnvConfig({
       env: {
