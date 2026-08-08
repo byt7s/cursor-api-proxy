@@ -20,7 +20,7 @@ import type { CursorExecutionMode } from "../execution-mode.js";
 import { json, writeSseHeaders } from "../http.js";
 import { runAgentStream, runAgentSync } from "../agent-runner.js";
 import { createStreamParser } from "../cli-stream-parser.js";
-import { resolveModelForExecution } from "../model-map.js";
+import { resolveModelWithoutCatalog } from "../model-map.js";
 import {
   buildPromptFromMessages,
   normalizeModelId,
@@ -46,7 +46,7 @@ import {
   warnPromptTruncated,
 } from "../win-cmdline-limit.js";
 import { abortOnClientDisconnect } from "../client-disconnect.js";
-import { getCachedCursorModels, type ModelCacheRef } from "./models.js";
+import type { ModelCacheRef } from "./models.js";
 
 function isRateLimited(stderr: string): boolean {
   return /\b429\b|rate.?limit|too many requests/i.test(stderr);
@@ -179,15 +179,14 @@ export async function handleResponses(
   pathname: string,
   remoteAddress: string,
 ): Promise<void> {
-  const { config, lastRequestedModelRef, modelCacheRef } = ctx;
+  const { config, lastRequestedModelRef } = ctx;
   const body = JSON.parse(rawBody || "{}") as OpenAiResponsesRequest;
   const requested = normalizeModelId(body.model);
   const model = resolveModel(requested, lastRequestedModelRef, config);
-  const models = await getCachedCursorModels(config, modelCacheRef);
-  const decision = resolveModelForExecution({
+  // Skip agent --list-models on the hot path (~2s); GET /v1/models still lists.
+  const decision = resolveModelWithoutCatalog({
     requested: model,
     defaultModel: config.defaultModel,
-    availableCursorIds: models.map((m) => m.id),
   });
   const cursorModel = decision.final;
   rememberResolvedModel(cursorModel, lastRequestedModelRef);

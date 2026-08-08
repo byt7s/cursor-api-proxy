@@ -1,6 +1,10 @@
 import { describe, expect, it } from "vitest";
 
-import { resolveModelForExecution, resolveToCursorModel } from "./model-map.js";
+import {
+  resolveModelForExecution,
+  resolveModelWithoutCatalog,
+  resolveToCursorModel,
+} from "./model-map.js";
 
 describe("resolveToCursorModel", () => {
   it("maps dated sonnet id to cursor sonnet-4.5", () => {
@@ -47,5 +51,25 @@ describe("resolveModelForExecution", () => {
     });
     expect(decision.final).toBe("default");
     expect(decision.requestedWasDefault).toBe(true);
+  });
+});
+
+describe("resolveModelWithoutCatalog", () => {
+  it("maps anthropic ids without listing models", () => {
+    const decision = resolveModelWithoutCatalog({
+      requested: "claude-sonnet-4-5-20250929",
+      defaultModel: "auto",
+    });
+    expect(decision.final).toBe("sonnet-4.5");
+    expect(decision.validated).toBe(false);
+    expect(decision.fallbackUsed).toBe(false);
+  });
+
+  it("passes unknown ids through for the CLI to reject", () => {
+    const decision = resolveModelWithoutCatalog({
+      requested: "totally-fake-model",
+      defaultModel: "auto",
+    });
+    expect(decision.final).toBe("totally-fake-model");
   });
 });
