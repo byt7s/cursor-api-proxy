@@ -22,6 +22,7 @@ import {
 import { formatDuration } from "./lib/format";
 import { hrefFor, useHashRoute, type RouteId } from "./lib/router";
 import { AccountsPage } from "./routes/AccountsPage";
+import { AuditPage } from "./routes/AuditPage";
 import { ConfigPage } from "./routes/ConfigPage";
 import { DiagnosticsPage } from "./routes/DiagnosticsPage";
 import { LogsPage } from "./routes/LogsPage";
@@ -47,6 +48,7 @@ const NAV_SECTIONS: Array<{ label: string; items: NavEntry[] }> = [
       { route: "accounts", label: "Accounts", icon: "◍" },
       { route: "config", label: "Config", icon: "⚙" },
       { route: "diagnostics", label: "Diagnostics", icon: "✚" },
+      { route: "audit", label: "Audit", icon: "⛨" },
     ],
   },
   {
@@ -70,6 +72,8 @@ function RouteView({ route }: { route: RouteId }) {
       return <ConfigPage />;
     case "diagnostics":
       return <DiagnosticsPage />;
+    case "audit":
+      return <AuditPage />;
     case "wiki":
       return <WikiPage />;
     case "settings":

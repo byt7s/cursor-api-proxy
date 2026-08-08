@@ -23,12 +23,36 @@ export type ProxyStatus = {
   pidFile: string;
   apiKeyConfigured: boolean;
   bridgeApiKeyRequired: boolean;
+  /** True when CURSOR_BRIDGE_DASHBOARD_KEY is set. */
+  dashboardKeyRequired?: boolean;
+  /** True when any credential guards the dashboard APIs. */
+  dashboardKeyProtected?: boolean;
   node: string;
   platform: string;
   startedAt: string;
 };
 
+export type ApiKeyScope = "chat" | "admin";
+
+/** Safe projection of an inbound key: never the value, only how to spot it. */
+export type ApiKeyDescriptor = {
+  label: string;
+  scope: ApiKeyScope;
+  fingerprint: string;
+};
+
+/** Which credential the browser used for the request that returned this. */
+export type ConfigCaller = { actor: string; fingerprint?: string };
+
 export type ProxyConfig = {
+  apiKeys: ApiKeyDescriptor[];
+  dashboardKeyConfigured: boolean;
+  keyRateLimitPerMin: number;
+  auditLogPath: string;
+  auditLogEnabled: boolean;
+  maxBodyBytes: number;
+  corsOrigins: string[];
+  caller: ConfigCaller;
   agentBin: string;
   useAcp: boolean;
   host: string;
@@ -136,6 +160,27 @@ export type RequestRecord = SessionRequest & {
   conversationHash?: string;
   promptChars?: number;
   completionChars?: number;
+};
+
+/** One line of `audit.jsonl` (see `src/lib/audit-log.ts`). */
+export type AuditRecord = {
+  ts: string;
+  action: string;
+  method: string;
+  route: string;
+  actor: string;
+  actorFingerprint?: string;
+  remoteAddress: string;
+  target?: string;
+  outcome: "ok" | "error";
+  status: number;
+  error?: string;
+};
+
+export type AuditPayload = {
+  path: string;
+  enabled: boolean;
+  records: AuditRecord[];
 };
 
 export type LogPayload = { path: string; lines: string[] };

@@ -7,6 +7,7 @@ export const ROUTES = [
   "logs",
   "config",
   "diagnostics",
+  "audit",
   "wiki",
   "settings",
 ] as const;

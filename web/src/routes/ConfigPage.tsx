@@ -154,6 +154,49 @@ const GROUPS: Group[] = [
           </Badge>
         ),
       },
+      {
+        key: "dashboardKey",
+        label: "Dedicated dashboard key",
+        value: (
+          <Badge tone={c.dashboardKeyConfigured ? "success" : "warning"}>
+            {c.dashboardKeyConfigured ? "configured" : "not set"}
+          </Badge>
+        ),
+      },
+      {
+        key: "apiKeys",
+        label: "Scoped keys",
+        value:
+          c.apiKeys.length > 0
+            ? c.apiKeys
+                .map((k) => `${k.label} (${k.scope}/${k.fingerprint})`)
+                .join(", ")
+            : "none",
+      },
+      {
+        key: "rateLimit",
+        label: "Per-key rate limit",
+        value:
+          c.keyRateLimitPerMin > 0 ? `${c.keyRateLimitPerMin}/min` : "off",
+      },
+      {
+        key: "maxBody",
+        label: "Max JSON body",
+        value: c.maxBodyBytes
+          ? `${Math.round(c.maxBodyBytes / (1024 * 1024))} MB`
+          : "unlimited",
+      },
+      {
+        key: "cors",
+        label: "CORS origins",
+        value: c.corsOrigins.length > 0 ? c.corsOrigins.join(", ") : "off",
+      },
+      {
+        key: "auditLog",
+        label: "Audit log",
+        value: c.auditLogEnabled ? c.auditLogPath : "disabled",
+        mono: c.auditLogEnabled,
+      },
       { key: "tlsEnabled", label: "TLS configured", value: bool(c.tlsEnabled) },
     ],
   },

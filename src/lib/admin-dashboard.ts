@@ -1,5 +1,4 @@
 import { execSync, spawn } from "node:child_process";
-import * as crypto from "node:crypto";
 import * as fs from "node:fs";
 import * as http from "node:http";
 import * as path from "node:path";
@@ -10,9 +9,21 @@ import { ACCOUNTS_DIR } from "../cli/constants.js";
 import { saveApiKeyAccount } from "../cli/login.js";
 import { runResetHwid } from "../cli/reset-hwid.js";
 import { writeAccountApiKey } from "./account-api-key.js";
+import { describeApiKeys } from "./api-keys.js";
+import {
+  appendAuditRecord,
+  auditRouteFor,
+  buildAuditRecord,
+  recentAuditRecords,
+} from "./audit-log.js";
 import type { BridgeConfig } from "./config.js";
+import {
+  authorizeSensitiveApi,
+  dashboardIsKeyProtected,
+  type AuthorizeResult,
+} from "./dashboard-auth.js";
 import { runDoctor } from "./doctor.js";
-import { extractBearerToken, isLoopbackAddress } from "./http.js";
+import { BodyTooLargeError } from "./http.js";
 import { recentRequestRecords } from "./request-record.js";
 import {
   computeSessionStats,
@@ -21,6 +32,17 @@ import {
 } from "./session-log.js";
 
 const PLIST_LABEL = "com.cursor-api-proxy";
+
+/**
+ * Target of the current mutation when it only becomes known after the body is
+ * parsed (account name, control action). Path-derived targets are resolved by
+ * `auditRouteFor` instead.
+ */
+const auditTargets = new WeakMap<http.ServerResponse, string>();
+
+function setAuditTarget(res: http.ServerResponse, target: string): void {
+  if (target) auditTargets.set(res, target);
+}
 
 const MIME: Record<string, string> = {
   ".html": "text/html; charset=utf-8",
@@ -154,14 +176,31 @@ function getStatus(
     pidFile,
     apiKeyConfigured: Boolean(env.CURSOR_API_KEY ?? env.CURSOR_AUTH_TOKEN),
     bridgeApiKeyRequired: Boolean(config.requiredKey),
+    dashboardKeyRequired: Boolean(config.dashboardKey),
+    dashboardKeyProtected: dashboardIsKeyProtected(config),
     node: process.version,
     platform: `${process.platform} ${process.arch}`,
     startedAt: new Date(START_TIME).toISOString(),
   });
 }
 
-function sanitizedBridgeConfig(config: BridgeConfig): Record<string, unknown> {
+function sanitizedBridgeConfig(
+  config: BridgeConfig,
+  caller?: AuthorizeResult,
+): Record<string, unknown> {
   return {
+    // Labels, scopes and 6-char fingerprints only — never key material.
+    apiKeys: describeApiKeys(config.apiKeys),
+    dashboardKeyConfigured: Boolean(config.dashboardKey),
+    keyRateLimitPerMin: config.keyRateLimitPerMin,
+    auditLogPath: config.auditLogPath,
+    auditLogEnabled: config.auditLogEnabled,
+    maxBodyBytes: config.maxBodyBytes,
+    corsOrigins: config.corsOrigins,
+    /** Identifies which credential the caller of this request used. */
+    caller: caller
+      ? { actor: caller.actor, fingerprint: caller.fingerprint }
+      : { actor: "unknown" },
     agentBin: config.agentBin,
     useAcp: config.useAcp,
     host: config.host,
@@ -238,55 +277,43 @@ function parseQuery(url: string): Record<string, string> {
   return out;
 }
 
-function bearerMatches(requiredKey: string, req: http.IncomingMessage): boolean {
-  const token = extractBearerToken(req) ?? "";
-  const a = Buffer.from(token, "utf8");
-  const b = Buffer.from(requiredKey, "utf8");
-  return a.length === b.length && crypto.timingSafeEqual(a, b);
-}
-
 /**
- * Mutating dashboard APIs and sensitive GETs:
- * - when `requiredKey` is set → Bearer must match
- * - when unset → allow only loopback clients
+ * Mutating dashboard APIs and sensitive GETs. Resolution order lives in
+ * `dashboard-auth.ts`: admin-scoped key → dedicated dashboard key → legacy
+ * `CURSOR_BRIDGE_API_KEY` → loopback fallback.
  */
 export function authorizeDashboardApi(
   req: http.IncomingMessage,
   config: BridgeConfig,
   kind: "mutate" | "sensitiveRead",
-): { ok: true } | { ok: false; status: number; error: string } {
-  if (config.requiredKey) {
-    if (!bearerMatches(config.requiredKey, req)) {
-      return {
-        ok: false,
-        status: 401,
-        error: "Authorization Bearer CURSOR_BRIDGE_API_KEY required",
-      };
-    }
-    return { ok: true };
-  }
-
-  if (kind === "mutate") {
-    const remote = req.socket?.remoteAddress;
-    if (!isLoopbackAddress(remote)) {
-      return {
-        ok: false,
-        status: 403,
-        error:
-          "Mutating dashboard APIs require CURSOR_BRIDGE_API_KEY when not on loopback",
-      };
-    }
-  }
-  return { ok: true };
+): AuthorizeResult {
+  return authorizeSensitiveApi(req, config, kind);
 }
 
 function readJsonBody(
   req: http.IncomingMessage,
+  maxBytes: number,
   cb: (err: Error | null, body: Record<string, unknown>) => void,
 ): void {
   let raw = "";
-  req.on("data", (c) => (raw += c));
+  let bytes = 0;
+  let done = false;
+  req.on("data", (c: Buffer | string) => {
+    if (done) return;
+    bytes += Buffer.byteLength(c);
+    if (maxBytes > 0 && bytes > maxBytes) {
+      // Drain rather than destroy so the 413 actually reaches the client.
+      done = true;
+      raw = "";
+      req.resume();
+      cb(new BodyTooLargeError(maxBytes), {});
+      return;
+    }
+    raw += c;
+  });
   req.on("end", () => {
+    if (done) return;
+    done = true;
     try {
       const body = JSON.parse(raw || "{}") as Record<string, unknown>;
       cb(null, body && typeof body === "object" ? body : {});
@@ -294,7 +321,22 @@ function readJsonBody(
       cb(new Error("invalid json"), {});
     }
   });
-  req.on("error", (err) => cb(err, {}));
+  req.on("error", (err) => {
+    if (done) return;
+    done = true;
+    cb(err, {});
+  });
+}
+
+function jsonBodyError(res: http.ServerResponse, err: Error): void {
+  if (err instanceof BodyTooLargeError) {
+    return json(res, 413, {
+      error: err.message,
+      code: "payload_too_large",
+      maxBytes: err.maxBytes,
+    });
+  }
+  return json(res, 400, { error: err.message });
 }
 
 function removeAccountDir(accountName: string): void {
@@ -379,21 +421,70 @@ export function handleAdminDashboard(
     (pathname === "/api/config" ||
       pathname === "/api/accounts" ||
       pathname === "/api/doctor" ||
+      pathname === "/api/audit" ||
       pathname === "/api/requests");
-  if (sensitiveGet) {
-    const auth = authorizeDashboardApi(req, config, "sensitiveRead");
-    if (!auth.ok) return json(res, auth.status, { error: auth.error });
-  }
 
   const isMutating =
     req.method === "POST" || req.method === "PUT" || req.method === "DELETE";
-  if (isMutating && pathname.startsWith("/api/")) {
-    const auth = authorizeDashboardApi(req, config, "mutate");
-    if (!auth.ok) return json(res, auth.status, { error: auth.error });
+
+  let auth: AuthorizeResult | undefined;
+  if (sensitiveGet || (isMutating && pathname.startsWith("/api/"))) {
+    auth = authorizeDashboardApi(
+      req,
+      config,
+      isMutating ? "mutate" : "sensitiveRead",
+    );
   }
 
+  // Mutations are audited whatever the outcome — a refused attempt is exactly
+  // what an operator wants to see after a key leak.
+  if (isMutating && pathname.startsWith("/api/")) {
+    const { route, target } = auditRouteFor(pathname);
+    const actor = auth?.actor ?? "anonymous";
+    const fingerprint = auth?.fingerprint;
+    const denial = auth && !auth.ok ? auth.error : undefined;
+    res.on("finish", () => {
+      appendAuditRecord(
+        buildAuditRecord({
+          method: req.method ?? "?",
+          route,
+          actor,
+          actorFingerprint: fingerprint,
+          remoteAddress: req.socket?.remoteAddress ?? "unknown",
+          target: target ?? auditTargets.get(res),
+          status: res.statusCode,
+          error: denial,
+        }),
+        {
+          enabled: config.auditLogEnabled,
+          logPath: config.auditLogPath,
+          maxBytes: config.auditLogMaxBytes,
+        },
+      );
+    });
+  }
+
+  if (auth && !auth.ok) return json(res, auth.status, { error: auth.error });
+
   if (req.method === "GET" && pathname === "/api/config") {
-    return json(res, 200, sanitizedBridgeConfig(config));
+    return json(res, 200, sanitizedBridgeConfig(config, auth));
+  }
+  if (req.method === "GET" && pathname === "/api/audit") {
+    const limit = Math.min(500, Math.max(1, Number(q.limit) || 50));
+    if (!config.auditLogEnabled) {
+      return json(res, 200, {
+        path: config.auditLogPath,
+        enabled: false,
+        records: [],
+      });
+    }
+    return readLastLines(config.auditLogPath, 20_000, (err, lines) => {
+      json(res, 200, {
+        path: config.auditLogPath,
+        enabled: true,
+        records: err ? [] : recentAuditRecords(lines, limit),
+      });
+    });
   }
   if (req.method === "GET" && pathname === "/api/log") {
     const n = Math.min(5000, Math.max(1, Number(q.lines) || 100));
@@ -453,9 +544,10 @@ export function handleAdminDashboard(
     return;
   }
   if (req.method === "POST" && pathname === "/api/accounts") {
-    return readJsonBody(req, (err, body) => {
-      if (err) return json(res, 400, { error: err.message });
+    return readJsonBody(req, config.maxBodyBytes, (err, body) => {
+      if (err) return jsonBodyError(res, err);
       const name = String(body.name ?? "").trim();
+      setAuditTarget(res, name);
       const apiKey = String(body.apiKey ?? "").trim();
       if (!name || !apiKey) {
         return json(res, 400, { error: "name and apiKey are required" });
@@ -488,8 +580,8 @@ export function handleAdminDashboard(
   if (req.method === "PUT" && pathname.startsWith("/api/accounts/") && pathname.endsWith("/key")) {
     const mid = pathname.slice("/api/accounts/".length, -"/key".length);
     const name = decodeURIComponent(mid.replace(/\/$/, ""));
-    return readJsonBody(req, (err, body) => {
-      if (err) return json(res, 400, { error: err.message });
+    return readJsonBody(req, config.maxBodyBytes, (err, body) => {
+      if (err) return jsonBodyError(res, err);
       const apiKey = String(body.apiKey ?? "").trim();
       try {
         setAccountKey(name, apiKey);
@@ -511,9 +603,10 @@ export function handleAdminDashboard(
     }
   }
   if (req.method === "POST" && pathname === "/api/reset-hwid") {
-    return readJsonBody(req, (err, body) => {
-      if (err) return json(res, 400, { error: err.message });
+    return readJsonBody(req, config.maxBodyBytes, (err, body) => {
+      if (err) return jsonBodyError(res, err);
       const deepClean = Boolean(body.deepClean);
+      setAuditTarget(res, deepClean ? "deep-clean" : "standard");
       void runResetHwid({ deepClean })
         .then((result) =>
           json(res, 200, {
@@ -567,8 +660,9 @@ export function handleAdminDashboard(
     return;
   }
   if (req.method === "POST" && pathname === "/api/control") {
-    return readJsonBody(req, (err, body) => {
-      if (err) return json(res, 400, { error: err.message });
+    return readJsonBody(req, config.maxBodyBytes, (err, body) => {
+      if (err) return jsonBodyError(res, err);
+      setAuditTarget(res, String(body.action ?? ""));
       runControl(String(body.action ?? ""), config, (ctrlErr, result) => {
         if (ctrlErr) return json(res, 400, { error: ctrlErr.message });
         json(res, 200, result);

@@ -55,14 +55,52 @@ export function writeSseHeaders(
   });
 }
 
-export async function readBody(req: http.IncomingMessage): Promise<string> {
+/** Thrown by `readBody` when the client sends more than `maxBytes`. */
+export class BodyTooLargeError extends Error {
+  readonly maxBytes: number;
+
+  constructor(maxBytes: number) {
+    super(`Request body exceeds ${maxBytes} bytes`);
+    this.name = "BodyTooLargeError";
+    this.maxBytes = maxBytes;
+  }
+}
+
+/**
+ * Buffers the request body, aborting once `maxBytes` is exceeded so a hostile
+ * or broken client cannot make the proxy hold an unbounded string in memory.
+ * `maxBytes <= 0` reads without a limit.
+ */
+export async function readBody(
+  req: http.IncomingMessage,
+  maxBytes = 0,
+): Promise<string> {
   return new Promise((resolve, reject) => {
     let data = "";
+    let bytes = 0;
     req.setEncoding("utf8");
-    req.on("data", (chunk) => {
+    let overflowed = false;
+    req.on("data", (chunk: string) => {
+      if (overflowed) return;
+      if (maxBytes > 0) {
+        bytes += Buffer.byteLength(chunk, "utf8");
+        if (bytes > maxBytes) {
+          // Drop what was buffered and drain the rest: keeping the socket
+          // alive is what lets the caller answer 413 instead of resetting.
+          overflowed = true;
+          data = "";
+          req.resume();
+          reject(new BodyTooLargeError(maxBytes));
+          return;
+        }
+      }
       data += chunk;
     });
-    req.on("end", () => resolve(data));
-    req.on("error", reject);
+    req.on("end", () => {
+      if (!overflowed) resolve(data);
+    });
+    req.on("error", (err) => {
+      if (!overflowed) reject(err);
+    });
   });
 }
