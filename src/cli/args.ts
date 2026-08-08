@@ -12,7 +12,11 @@ export type ParsedArgs = {
   login: boolean;
   accountsList: boolean;
   logout: boolean;
+  /** `set-key <name> <key>` — store Dashboard API key on an account dir. */
+  setKey: boolean;
   accountName: string;
+  /** Positional API key for `set-key`. */
+  apiKey: string;
   proxies: string[];
   resetHwid: boolean;
   deepClean: boolean;
@@ -33,7 +37,9 @@ export function parseArgs(argv: string[]): ParsedArgs {
   let login = false;
   let accountsList = false;
   let logout = false;
+  let setKey = false;
   let accountName = "";
+  let apiKey = "";
   let proxies: string[] = [];
   let resetHwid = false;
   let deepClean = false;
@@ -102,6 +108,17 @@ export function parseArgs(argv: string[]): ParsedArgs {
       logout = true;
       if (i + 1 < argv.length && !argv[i + 1].startsWith("-")) {
         accountName = argv[++i];
+      }
+      continue;
+    }
+
+    if (arg === "set-key") {
+      setKey = true;
+      if (i + 1 < argv.length && !argv[i + 1].startsWith("-")) {
+        accountName = argv[++i];
+      }
+      if (i + 1 < argv.length && !argv[i + 1].startsWith("-")) {
+        apiKey = argv[++i];
       }
       continue;
     }
@@ -184,7 +201,9 @@ export function parseArgs(argv: string[]): ParsedArgs {
     login,
     accountsList,
     logout,
+    setKey,
     accountName,
+    apiKey,
     proxies,
     resetHwid,
     deepClean,
@@ -207,6 +226,9 @@ export function printHelp(version: string): void {
     "  login [name] --proxy=...  CLI login via a random proxy from a comma-separated list",
   );
   console.log("  logout <name>             Remove a saved Cursor account");
+  console.log(
+    "  set-key <name> <key>      Store a Dashboard API key (keeps CLI session if present)",
+  );
   console.log(
     "  accounts                  List saved accounts (also GET /accounts on the server)",
   );

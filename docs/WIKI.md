@@ -137,7 +137,7 @@ The plist label is **`com.cursor-api-proxy`**. Use **`cursor-api-proxy disable`*
 **`GET /accounts` notes**
 
 - Returns `{ "accounts": [ … ] }` with fields such as `name`, `authMethod`, `email`, `plan`, `usage`, `usageError`.
-- Agent API keys (`crsr_…`) can enrich email / key metadata via Cursor `GET /v1/me`, but **plan and usage stay `null`** (`usageError: "api_key_unsupported"`) — billing endpoints need a session JWT from CLI/browser login.
+- Agent API keys (`crsr_…`) can enrich email / key metadata via Cursor `GET /v1/me`. **Key-only** accounts keep plan/usage `null` (`usageError: "api_key_unsupported"`). A CLI/browser session JWT can coexist with `.cursor-api-key` on the same account dir (`set-key`); plan/usage then come from the session while the key remains available for key-based execution.
 
 ---
 
