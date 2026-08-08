@@ -5,6 +5,11 @@ import {
   readAccountApiKey,
   withAccountApiKeyArgs,
 } from "./account-api-key.js";
+import {
+  accountKeyFor,
+  AdmissionCapacityError,
+  admitAgentRun,
+} from "./admission.js";
 import { runAcpStream, runAcpSync } from "./acp-client.js";
 import { getAcpWarmPool } from "./acp-pool.js";
 import type { BridgeConfig } from "./config.js";
@@ -12,6 +17,31 @@ import type { CursorExecutionMode } from "./execution-mode.js";
 import { run, runStreaming } from "./process.js";
 import { getChatOnlyEnvOverrides } from "./workspace.js";
 import { readKeychainToken, writeCachedToken } from "./token-cache.js";
+
+async function withAdmission<T>(
+  config: BridgeConfig,
+  configDir: string | undefined,
+  signal: AbortSignal | undefined,
+  run: () => Promise<T>,
+): Promise<T> {
+  const admit = await admitAgentRun(accountKeyFor(configDir), {
+    signal,
+    waitMs: config.admissionWaitMs,
+  });
+  if (!admit.ok) {
+    if (admit.reason === "aborted") {
+      const err = new Error("aborted");
+      err.name = "AbortError";
+      throw err;
+    }
+    throw new AdmissionCapacityError(admit.retryAfterMs);
+  }
+  try {
+    return await run();
+  } finally {
+    admit.release();
+  }
+}
 
 function cacheTokenForAccount(configDir?: string): void {
   if (!configDir) return;
@@ -80,6 +110,30 @@ function cleanupTemp(tempDir?: string): void {
 }
 
 export function runAgentSync(
+  config: BridgeConfig,
+  workspaceDir: string,
+  effectiveChatOnly: boolean,
+  cmdArgs: string[],
+  tempDir?: string,
+  stdinPrompt?: string,
+  configDir?: string,
+  signal?: AbortSignal,
+): Promise<AgentRunResult> {
+  return withAdmission(config, configDir, signal, () =>
+    runAgentSyncUnlocked(
+      config,
+      workspaceDir,
+      effectiveChatOnly,
+      cmdArgs,
+      tempDir,
+      stdinPrompt,
+      configDir,
+      signal,
+    ),
+  );
+}
+
+function runAgentSyncUnlocked(
   config: BridgeConfig,
   workspaceDir: string,
   effectiveChatOnly: boolean,
@@ -170,6 +224,32 @@ export function runAgentSync(
 export type StreamLineHandler = (line: string) => void;
 
 export function runAgentStream(
+  config: BridgeConfig,
+  workspaceDir: string,
+  effectiveChatOnly: boolean,
+  cmdArgs: string[],
+  onLine: StreamLineHandler,
+  tempDir?: string,
+  stdinPrompt?: string,
+  configDir?: string,
+  signal?: AbortSignal,
+): Promise<{ code: number; stderr: string }> {
+  return withAdmission(config, configDir, signal, () =>
+    runAgentStreamUnlocked(
+      config,
+      workspaceDir,
+      effectiveChatOnly,
+      cmdArgs,
+      onLine,
+      tempDir,
+      stdinPrompt,
+      configDir,
+      signal,
+    ),
+  );
+}
+
+function runAgentStreamUnlocked(
   config: BridgeConfig,
   workspaceDir: string,
   effectiveChatOnly: boolean,

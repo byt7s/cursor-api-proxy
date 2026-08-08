@@ -73,6 +73,12 @@ export type BridgeConfig = {
   bridgePackageVersion: string;
   /** Optional operator notes appended to the preamble (see CURSOR_BRIDGE_CONTEXT_EXTRA). */
   contextExtra?: string;
+  /** Global cap on concurrent agent runs. */
+  maxConcurrentRuns: number;
+  /** Per-account cap on concurrent agent runs. */
+  maxConcurrentRunsPerAccount: number;
+  /** How long to wait for an admission permit before failing. */
+  admissionWaitMs: number;
 };
 
 export function loadBridgeConfig(opts: EnvOptions = {}): BridgeConfig {
@@ -130,5 +136,8 @@ export function loadBridgeConfig(opts: EnvOptions = {}): BridgeConfig {
     contextPreamble: env.contextPreamble,
     bridgePackageVersion: readBridgePackageVersion(),
     contextExtra: env.contextExtra,
+    maxConcurrentRuns: env.maxConcurrentRuns,
+    maxConcurrentRunsPerAccount: env.maxConcurrentRunsPerAccount,
+    admissionWaitMs: env.admissionWaitMs,
   };
 }

@@ -2,6 +2,7 @@ import * as fs from "node:fs";
 import * as http from "node:http";
 import * as https from "node:https";
 
+import { configureAdmission } from "./admission.js";
 import type { BridgeConfig } from "./config.js";
 import { createRequestListener } from "./request-listener.js";
 import { initAccountPool } from "./account-pool.js";
@@ -24,6 +25,12 @@ export function startBridgeServer(
 ): (http.Server | https.Server)[] {
   const { config } = opts;
   const servers: (http.Server | https.Server)[] = [];
+
+  configureAdmission({
+    maxConcurrentRuns: config.maxConcurrentRuns,
+    maxConcurrentRunsPerAccount: config.maxConcurrentRunsPerAccount,
+    waitMs: config.admissionWaitMs,
+  });
 
   if (config.configDirs && config.configDirs.length > 0) {
     if (config.multiPort) {
