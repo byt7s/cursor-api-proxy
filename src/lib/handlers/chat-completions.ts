@@ -44,6 +44,24 @@ import {
   fitPromptToWinCmdline,
   warnPromptTruncated,
 } from "../win-cmdline-limit.js";
+import { LatencyWaterfall } from "../latency-waterfall.js";
+
+function logLatency(
+  config: BridgeConfig,
+  latency: LatencyWaterfall,
+  extra?: Record<string, unknown>,
+): void {
+  if (!config.latencyWaterfall) return;
+  latency.logLine(extra);
+}
+
+/** Approximate ACP/CLI ready → first token when finer agent marks are unavailable. */
+function markModelFirstByte(latency: LatencyWaterfall): void {
+  if (latency.has("model_first_byte")) return;
+  if (!latency.has("spawn_ready")) latency.mark("spawn_ready");
+  if (!latency.has("session_ready")) latency.mark("session_ready");
+  latency.mark("model_first_byte");
+}
 
 export type ChatCompletionsCtx = {
   config: BridgeConfig;
@@ -60,6 +78,7 @@ export async function handleChatCompletions(
   pathname: string,
   remoteAddress: string,
 ): Promise<void> {
+  const latency = new LatencyWaterfall();
   const { config, lastRequestedModelRef } = ctx;
   const body = JSON.parse(rawBody || "{}") as OpenAiChatCompletionRequest;
   const requested = normalizeModelId(body.model);
@@ -195,6 +214,8 @@ export async function handleChatCompletions(
     : undefined;
 
   if (body.stream) {
+    latency.mark("exec_start");
+    latency.mark("account_select_start");
     const abortController = new AbortController();
     abortOnClientDisconnect(res, abortController);
     res.on("error", () => {
@@ -210,6 +231,7 @@ export async function handleChatCompletions(
     };
 
     const writeChatChunk = (content: string) => {
+      markModelFirstByte(latency);
       res.write(
         `data: ${JSON.stringify({
           id,
@@ -224,6 +246,7 @@ export async function handleChatCompletions(
     };
 
     const finishChatStream = (accumulated: string) => {
+      if (!latency.has("model_complete")) latency.mark("model_complete");
       logTrafficResponse(
         config.verbose,
         model ?? cursorModel,
@@ -247,11 +270,15 @@ export async function handleChatCompletions(
         })}\n\n`,
       );
       res.write("data: [DONE]\n\n");
+      latency.mark("shape_done");
+      logLatency(config, latency, { ok: true, model: displayModel });
     };
 
     if (config.useAcp && typeof promptForAgent === "string") {
       let accumulated = "";
       try {
+        latency.mark("account_select_end");
+        latency.mark("spawn_start");
         const outcome = await runStreamWithAccountFailover({
           signal: abortController.signal,
           onCommit: ensureHeaders,
@@ -274,11 +301,19 @@ export async function handleChatCompletions(
         });
 
         if (outcome.status === "aborted") {
+          latency.mark("shape_done");
+          logLatency(config, latency, {
+            ok: false,
+            aborted: true,
+            model: displayModel,
+          });
           if (headersWritten) res.end();
           return;
         }
 
         if (outcome.status === "all_rate_limited") {
+          latency.mark("shape_done");
+          logLatency(config, latency, { ok: false, model: displayModel });
           if (!headersWritten) {
             json(res, 429, {
               error: {
@@ -302,6 +337,8 @@ export async function handleChatCompletions(
           return;
         }
         if (outcome.status === "all_disabled") {
+          latency.mark("shape_done");
+          logLatency(config, latency, { ok: false, model: displayModel });
           if (!headersWritten) {
             json(res, 403, {
               error: {
@@ -343,6 +380,8 @@ export async function handleChatCompletions(
           );
           res.write("data: [DONE]\n\n");
           logAccountStats(config.verbose, getAccountStats());
+          latency.mark("shape_done");
+          logLatency(config, latency, { ok: false, model: displayModel });
           res.end();
           return;
         }
@@ -366,7 +405,8 @@ export async function handleChatCompletions(
           res.write("data: [DONE]\n\n");
         }
         if (err instanceof AdmissionCapacityError) {
-          const retryAfterSec = Math.max(1, Math.ceil(err.retryAfterMs / 1000));
+          latency.mark("shape_done");
+          logLatency(config, latency, { ok: false, model: displayModel });
           res.write(
             `data: ${JSON.stringify({
               error: {
@@ -384,6 +424,8 @@ export async function handleChatCompletions(
           `[${new Date().toISOString()}] Agent stream error:`,
           err,
         );
+        latency.mark("shape_done");
+        logLatency(config, latency, { ok: false, model: displayModel });
         if (headersWritten) res.end();
       }
       return;
@@ -391,6 +433,8 @@ export async function handleChatCompletions(
 
     let accumulated = "";
     try {
+      latency.mark("account_select_end");
+      latency.mark("spawn_start");
       const outcome = await runStreamWithAccountFailover({
         signal: abortController.signal,
         onCommit: ensureHeaders,
@@ -417,11 +461,19 @@ export async function handleChatCompletions(
       });
 
       if (outcome.status === "aborted") {
+        latency.mark("shape_done");
+        logLatency(config, latency, {
+          ok: false,
+          aborted: true,
+          model: displayModel,
+        });
         if (headersWritten) res.end();
         return;
       }
 
       if (outcome.status === "all_rate_limited") {
+        latency.mark("shape_done");
+        logLatency(config, latency, { ok: false, model: displayModel });
         if (!headersWritten) {
           json(res, 429, {
             error: {
@@ -436,6 +488,8 @@ export async function handleChatCompletions(
         return;
       }
       if (outcome.status === "all_disabled") {
+        latency.mark("shape_done");
+        logLatency(config, latency, { ok: false, model: displayModel });
         if (!headersWritten) {
           json(res, 403, {
             error: {
@@ -460,6 +514,8 @@ export async function handleChatCompletions(
           outcome.code,
           outcome.stderr,
         );
+        latency.mark("shape_done");
+        logLatency(config, latency, { ok: false, model: displayModel });
         if (!headersWritten) {
           json(res, 500, {
             error: {
@@ -484,14 +540,20 @@ export async function handleChatCompletions(
         `[${new Date().toISOString()}] Agent stream error:`,
         err,
       );
+      latency.mark("shape_done");
+      logLatency(config, latency, { ok: false, model: displayModel });
       if (headersWritten) res.end();
     }
     return;
   }
 
+  latency.mark("exec_start");
+  latency.mark("account_select_start");
   const abortController = new AbortController();
   abortOnClientDisconnect(res, abortController);
 
+  latency.mark("account_select_end");
+  latency.mark("spawn_start");
   const outcome = await runSyncWithAccountFailover(
     (configDir) =>
       runAgentSync(
@@ -508,6 +570,12 @@ export async function handleChatCompletions(
   );
 
   if (outcome.status === "aborted") {
+    latency.mark("shape_done");
+    logLatency(config, latency, {
+      ok: false,
+      aborted: true,
+      model: displayModel,
+    });
     return;
   }
 
@@ -523,6 +591,8 @@ export async function handleChatCompletions(
         outcome.result.stderr ?? "",
       );
     }
+    latency.mark("shape_done");
+    logLatency(config, latency, { ok: false, model: displayModel });
     json(res, 429, {
       error: {
         message: ALL_ACCOUNTS_RATE_LIMITED_MESSAGE,
@@ -533,6 +603,8 @@ export async function handleChatCompletions(
   }
   if (outcome.status === "all_disabled") {
     logAccountStats(config.verbose, getAccountStats());
+    latency.mark("shape_done");
+    logLatency(config, latency, { ok: false, model: displayModel });
     json(res, 403, {
       error: {
         message: ALL_ACCOUNTS_DISABLED_MESSAGE,
@@ -553,12 +625,25 @@ export async function handleChatCompletions(
       outcome.result.code,
       outcome.result.stderr ?? "",
     );
-    json(res, 500, {
-      error: { message: errMsg, code: "cursor_cli_error" },
-    });
+    latency.mark("shape_done");
+    logLatency(config, latency, { ok: false, model: displayModel });
+    json(
+      res,
+      500,
+      {
+        error: { message: errMsg, code: "cursor_cli_error" },
+      },
+      config.latencyWaterfall
+        ? { "X-Cursor-Proxy-Waterfall": latency.headerValue() }
+        : undefined,
+    );
     return;
   }
 
+  if (!latency.has("spawn_ready")) latency.mark("spawn_ready");
+  if (!latency.has("session_ready")) latency.mark("session_ready");
+  if (!latency.has("model_first_byte")) latency.mark("model_first_byte");
+  if (!latency.has("model_complete")) latency.mark("model_complete");
   const content = (outcome.result.stdout ?? "").trim();
   logTrafficResponse(config.verbose, model ?? cursorModel, content, false);
 
@@ -566,7 +651,15 @@ export async function handleChatCompletions(
   const completionTokens = Math.max(1, Math.round(content.length / 4));
   const totalTokens = promptTokens + completionTokens;
 
+  latency.mark("shape_done");
+  logLatency(config, latency, { ok: true, model: displayModel });
   logAccountStats(config.verbose, getAccountStats());
+  const extraHeaders = {
+    ...(truncatedHeaders ?? {}),
+    ...(config.latencyWaterfall
+      ? { "X-Cursor-Proxy-Waterfall": latency.headerValue() }
+      : {}),
+  };
   json(
     res,
     200,
@@ -588,6 +681,6 @@ export async function handleChatCompletions(
         total_tokens: totalTokens,
       },
     },
-    truncatedHeaders,
+    Object.keys(extraHeaders).length > 0 ? extraHeaders : undefined,
   );
 }
