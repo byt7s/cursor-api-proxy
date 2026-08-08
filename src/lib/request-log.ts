@@ -98,9 +98,11 @@ export function logAccountStats(verbose: boolean, stats: AccountStat[]): void {
       s.totalRequests > 0
         ? `avg:${Math.round(s.totalLatencyMs / s.totalRequests)}ms`
         : `avg:-`;
-    const status = s.isRateLimited
-      ? `${C.red}⛔ rate-limited (recovers ${new Date(s.rateLimitUntil).toISOString()})${C.reset}`
-      : `${C.green}✓${C.reset}`;
+    const status = s.isDisabled
+      ? `${C.red}⛔ disabled${s.disabledReason ? ` (${s.disabledReason})` : ""}${C.reset}`
+      : s.isRateLimited
+        ? `${C.red}⛔ rate-limited (recovers ${new Date(s.rateLimitUntil).toISOString()})${C.reset}`
+        : `${C.green}✓${C.reset}`;
     lines.push(
       `  ${C.bold}${name}${C.reset}  ${active}  ${total}  ${ok}  ${err}  ${rl}  ${C.dim}${avg}${C.reset}  ${status}`,
     );

@@ -65,15 +65,41 @@ describe("AccountPool Active Requests & Rate Limits", () => {
       expect(pool.getNextConfigDir()).toBe("/dir2");
     });
 
-    it("should fallback to sorting by recovery time if all accounts are rate-limited", () => {
+    it("should return undefined if all accounts are rate-limited (no fallback)", () => {
       const pool = new AccountPool(["/dir1", "/dir2"]);
 
-      // Rate limit both, but dir2 recovers sooner
       pool.reportRateLimit("/dir1", 60000);
       pool.reportRateLimit("/dir2", 30000);
 
-      // Should select dir2 because its penalty is shorter
+      expect(pool.getNextConfigDir()).toBeUndefined();
+    });
+
+    it("should fallback to soonest recovery when allowRateLimitedFallback is set", () => {
+      const pool = new AccountPool(["/dir1", "/dir2"]);
+
+      pool.reportRateLimit("/dir1", 60000);
+      pool.reportRateLimit("/dir2", 30000);
+
+      expect(
+        pool.getNextConfigDir({ allowRateLimitedFallback: true }),
+      ).toBe("/dir2");
+    });
+
+    it("should skip excluded accounts when selecting next", () => {
+      const pool = new AccountPool(["/dir1", "/dir2", "/dir3"]);
+      expect(
+        pool.getNextConfigDir({ exclude: new Set(["/dir1", "/dir2"]) }),
+      ).toBe("/dir3");
+    });
+
+    it("should skip permanently disabled accounts", () => {
+      const pool = new AccountPool(["/dir1", "/dir2"]);
+      pool.reportAccountDisabled("/dir1", "upgrade_plan");
       expect(pool.getNextConfigDir()).toBe("/dir2");
+      expect(pool.getUsableCount()).toBe(1);
+      expect(pool.getStats().find((s) => s.configDir === "/dir1")?.isDisabled).toBe(
+        true,
+      );
     });
   });
 

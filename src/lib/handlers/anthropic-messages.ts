@@ -20,7 +20,6 @@ import { resolveModelForExecution } from "../model-map.js";
 import { normalizeModelId, toolsToSystemText } from "../openai.js";
 import {
   logAgentError,
-  logAccountAssigned,
   logAccountStats,
   logModelResolution,
   logTrafficRequest,
@@ -31,24 +30,18 @@ import { rememberResolvedModel, resolveModel } from "../resolve-model.js";
 import { resolveRequestMode } from "../resolve-mode.js";
 import { resolveWorkspace } from "../workspace.js";
 import { sanitizeMessages, sanitizeSystem } from "../sanitize.js";
+import { getAccountStats } from "../account-pool.js";
 import {
-  getNextAccountConfigDir,
-  reportRequestStart,
-  reportRequestEnd,
-  reportRateLimit,
-  reportRequestSuccess,
-  reportRequestError,
-  getAccountStats,
-} from "../account-pool.js";
+  ALL_ACCOUNTS_DISABLED_MESSAGE,
+  ALL_ACCOUNTS_RATE_LIMITED_MESSAGE,
+  runStreamWithAccountFailover,
+  runSyncWithAccountFailover,
+} from "../account-failover.js";
 import {
   fitPromptToWinCmdline,
   warnPromptTruncated,
 } from "../win-cmdline-limit.js";
 import { abortOnClientDisconnect } from "../client-disconnect.js";
-
-function isRateLimited(stderr: string): boolean {
-  return /\b429\b|rate.?limit|too many requests/i.test(stderr);
-}
 
 export type AnthropicMessagesCtx = {
   config: BridgeConfig;
@@ -228,238 +221,343 @@ export async function handleAnthropicMessages(
     config.promptViaStdin || config.useAcp ? agentPrompt : undefined;
 
   if (body.stream) {
-    writeSseHeaders(res, truncatedHeaders);
+    const abortController = new AbortController();
+    abortOnClientDisconnect(res, abortController);
     res.on("error", () => {
       /* client disconnected mid-stream */
     });
 
+    let headersWritten = false;
     const writeEvent = (evt: object) => {
       res.write(`data: ${JSON.stringify(evt)}\n\n`);
     };
 
-    writeEvent({
-      type: "message_start",
-      message: {
-        id: msgId,
-        type: "message",
-        role: "assistant",
-        model: displayModel ?? cursorModel,
-        content: [],
-      },
-    });
-    writeEvent({
-      type: "content_block_start",
-      index: 0,
-      content_block: { type: "text", text: "" },
-    });
+    const ensureHeaders = () => {
+      if (headersWritten) return;
+      headersWritten = true;
+      writeSseHeaders(res, truncatedHeaders);
+      writeEvent({
+        type: "message_start",
+        message: {
+          id: msgId,
+          type: "message",
+          role: "assistant",
+          model: displayModel ?? cursorModel,
+          content: [],
+        },
+      });
+      writeEvent({
+        type: "content_block_start",
+        index: 0,
+        content_block: { type: "text", text: "" },
+      });
+    };
 
-    const configDir = getNextAccountConfigDir();
-    logAccountAssigned(configDir);
-    reportRequestStart(configDir);
-    const streamStart = Date.now();
-
-    const abortController = new AbortController();
-    abortOnClientDisconnect(res, abortController);
+    const finishAnthropicStream = (accumulated: string) => {
+      logTrafficResponse(
+        config.verbose,
+        model ?? cursorModel,
+        accumulated,
+        true,
+      );
+      writeEvent({ type: "content_block_stop", index: 0 });
+      writeEvent({
+        type: "message_delta",
+        delta: { stop_reason: "end_turn", stop_sequence: null },
+        usage: { output_tokens: 0 },
+      });
+      writeEvent({ type: "message_stop" });
+    };
 
     if (config.useAcp && typeof promptForAgent === "string") {
       let accumulated = "";
-      runAgentStream(
-        config,
-        workspaceDir,
-        effectiveChatOnly,
-        cmdArgs,
-        (chunk) => {
-          accumulated += chunk;
-          writeEvent({
-            type: "content_block_delta",
-            index: 0,
-            delta: { type: "text_delta", text: chunk },
-          });
-        },
-        tempDir,
-        promptForAgent,
-        configDir,
-        abortController.signal,
-      )
-        .then(({ code, stderr: stderrOut }) => {
-          const latencyMs = Date.now() - streamStart;
-          reportRequestEnd(configDir);
+      try {
+        const outcome = await runStreamWithAccountFailover({
+          signal: abortController.signal,
+          onCommit: ensureHeaders,
+          onChunk: (chunk) => {
+            accumulated += chunk;
+            writeEvent({
+              type: "content_block_delta",
+              index: 0,
+              delta: { type: "text_delta", text: chunk },
+            });
+          },
+          runOnce: (configDir, onChunk) =>
+            runAgentStream(
+              config,
+              workspaceDir,
+              effectiveChatOnly,
+              cmdArgs,
+              onChunk,
+              tempDir,
+              promptForAgent,
+              configDir,
+              abortController.signal,
+            ),
+        });
 
-          if (stderrOut && isRateLimited(stderrOut)) {
-            reportRateLimit(configDir, 60000);
-          }
+        if (outcome.status === "aborted") {
+          if (headersWritten) res.end();
+          return;
+        }
 
-          if (!abortController.signal.aborted) {
-            if (code !== 0) {
-              reportRequestError(configDir, latencyMs);
-              const publicMsg = logAgentError(
-                config.sessionsLogPath,
-                method,
-                pathname,
-                remoteAddress,
-                code,
-                stderrOut,
-              );
-              writeEvent({
-                type: "error",
-                error: { type: "api_error", message: publicMsg },
-              });
-            } else {
-              reportRequestSuccess(configDir, latencyMs);
-              logTrafficResponse(
-                config.verbose,
-                model ?? cursorModel,
-                accumulated,
-                true,
-              );
-              writeEvent({ type: "content_block_stop", index: 0 });
-              writeEvent({
-                type: "message_delta",
-                delta: { stop_reason: "end_turn", stop_sequence: null },
-                usage: { output_tokens: 0 },
-              });
-              writeEvent({ type: "message_stop" });
-            }
-          }
-          logAccountStats(config.verbose, getAccountStats());
-          res.end();
-        })
-        .catch((err) => {
-          reportRequestEnd(configDir);
-          if (!abortController.signal.aborted) {
-            reportRequestError(configDir, Date.now() - streamStart);
-          }
-          console.error(
-            `[${new Date().toISOString()}] Agent stream error:`,
-            err,
-          );
-          if (!abortController.signal.aborted) {
+        if (outcome.status === "all_rate_limited") {
+          if (!headersWritten) {
+            json(res, 429, {
+              error: {
+                type: "rate_limit_error",
+                message: ALL_ACCOUNTS_RATE_LIMITED_MESSAGE,
+              },
+            });
+          } else {
             writeEvent({
               type: "error",
               error: {
-                type: "api_error",
-                message: "The Cursor agent stream failed. See server logs for details.",
+                type: "rate_limit_error",
+                message: ALL_ACCOUNTS_RATE_LIMITED_MESSAGE,
               },
             });
+            res.end();
           }
-          res.end();
-        });
-      return;
-    }
-
-    let accumulated = "";
-    const parseLine = createStreamParser(
-      (text) => {
-        accumulated += text;
-        writeEvent({
-          type: "content_block_delta",
-          index: 0,
-          delta: { type: "text_delta", text },
-        });
-      },
-      () => {
-        logTrafficResponse(
-          config.verbose,
-          model ?? cursorModel,
-          accumulated,
-          true,
-        );
-        writeEvent({ type: "content_block_stop", index: 0 });
-        writeEvent({
-          type: "message_delta",
-          delta: { stop_reason: "end_turn", stop_sequence: null },
-          usage: { output_tokens: 0 },
-        });
-        writeEvent({ type: "message_stop" });
-      },
-    );
-
-    runAgentStream(
-      config,
-      workspaceDir,
-      effectiveChatOnly,
-      cmdArgs,
-      parseLine,
-      tempDir,
-      promptForAgent,
-      configDir,
-      abortController.signal,
-    )
-      .then(({ code, stderr: stderrOut }) => {
-        const latencyMs = Date.now() - streamStart;
-        reportRequestEnd(configDir);
-
-        if (stderrOut && isRateLimited(stderrOut)) {
-          reportRateLimit(configDir, 60000);
+          logAccountStats(config.verbose, getAccountStats());
+          return;
         }
 
-        if (abortController.signal.aborted) {
-          /* client disconnected — do not count as success or failure */
-        } else if (code !== 0) {
-          reportRequestError(configDir, latencyMs);
-          logAgentError(
+        if (outcome.status === "all_disabled") {
+          if (!headersWritten) {
+            json(res, 403, {
+              error: {
+                type: "invalid_request_error",
+                message: ALL_ACCOUNTS_DISABLED_MESSAGE,
+              },
+            });
+          } else {
+            writeEvent({
+              type: "error",
+              error: {
+                type: "invalid_request_error",
+                message: ALL_ACCOUNTS_DISABLED_MESSAGE,
+              },
+            });
+            res.end();
+          }
+          logAccountStats(config.verbose, getAccountStats());
+          return;
+        }
+
+        if (outcome.status === "error") {
+          ensureHeaders();
+          const publicMsg = logAgentError(
             config.sessionsLogPath,
             method,
             pathname,
             remoteAddress,
-            code,
-            stderrOut,
+            outcome.code,
+            outcome.stderr,
           );
-        } else {
-          reportRequestSuccess(configDir, latencyMs);
+          writeEvent({
+            type: "error",
+            error: { type: "api_error", message: publicMsg },
+          });
+          logAccountStats(config.verbose, getAccountStats());
+          res.end();
+          return;
         }
+
+        ensureHeaders();
+        finishAnthropicStream(accumulated);
         logAccountStats(config.verbose, getAccountStats());
         res.end();
-      })
-      .catch((err) => {
-        reportRequestEnd(configDir);
+      } catch (err) {
         if (!abortController.signal.aborted) {
-          reportRequestError(configDir, Date.now() - streamStart);
+          ensureHeaders();
+          writeEvent({
+            type: "error",
+            error: {
+              type: "api_error",
+              message:
+                "The Cursor agent stream failed. See server logs for details.",
+            },
+          });
         }
         console.error(
           `[${new Date().toISOString()}] Agent stream error:`,
           err,
         );
-        res.end();
+        if (headersWritten) res.end();
+      }
+      return;
+    }
+
+    let accumulated = "";
+    try {
+      const outcome = await runStreamWithAccountFailover({
+        signal: abortController.signal,
+        onCommit: ensureHeaders,
+        onChunk: (text) => {
+          accumulated += text;
+          writeEvent({
+            type: "content_block_delta",
+            index: 0,
+            delta: { type: "text_delta", text },
+          });
+        },
+        runOnce: (configDir, onChunk) => {
+          const parseLine = createStreamParser(onChunk, () => {
+            /* finish written after successful failover outcome */
+          });
+          return runAgentStream(
+            config,
+            workspaceDir,
+            effectiveChatOnly,
+            cmdArgs,
+            parseLine,
+            tempDir,
+            promptForAgent,
+            configDir,
+            abortController.signal,
+          );
+        },
       });
+
+      if (outcome.status === "aborted") {
+        if (headersWritten) res.end();
+        return;
+      }
+
+      if (outcome.status === "all_rate_limited") {
+        if (!headersWritten) {
+          json(res, 429, {
+            error: {
+              type: "rate_limit_error",
+              message: ALL_ACCOUNTS_RATE_LIMITED_MESSAGE,
+            },
+          });
+        } else {
+          res.end();
+        }
+        logAccountStats(config.verbose, getAccountStats());
+        return;
+      }
+
+      if (outcome.status === "all_disabled") {
+        if (!headersWritten) {
+          json(res, 403, {
+            error: {
+              type: "invalid_request_error",
+              message: ALL_ACCOUNTS_DISABLED_MESSAGE,
+            },
+          });
+        } else {
+          res.end();
+        }
+        logAccountStats(config.verbose, getAccountStats());
+        return;
+      }
+
+      if (outcome.status === "error") {
+        logAgentError(
+          config.sessionsLogPath,
+          method,
+          pathname,
+          remoteAddress,
+          outcome.code,
+          outcome.stderr,
+        );
+        if (!headersWritten) {
+          json(res, 500, {
+            error: {
+              type: "api_error",
+              message:
+                "The Cursor agent process failed. See server logs for details.",
+              code: "cursor_cli_error",
+            },
+          });
+        } else {
+          res.end();
+        }
+        logAccountStats(config.verbose, getAccountStats());
+        return;
+      }
+
+      ensureHeaders();
+      finishAnthropicStream(accumulated);
+      logAccountStats(config.verbose, getAccountStats());
+      res.end();
+    } catch (err) {
+      console.error(
+        `[${new Date().toISOString()}] Agent stream error:`,
+        err,
+      );
+      if (headersWritten) res.end();
+    }
     return;
   }
-
-  const configDir = getNextAccountConfigDir();
-  logAccountAssigned(configDir);
-  reportRequestStart(configDir);
-  const syncStart = Date.now();
 
   const abortController = new AbortController();
   abortOnClientDisconnect(res, abortController);
 
-  const out = await runAgentSync(
-    config,
-    workspaceDir,
-    effectiveChatOnly,
-    cmdArgs,
-    tempDir,
-    promptForAgent,
-    configDir,
+  const outcome = await runSyncWithAccountFailover(
+    (configDir) =>
+      runAgentSync(
+        config,
+        workspaceDir,
+        effectiveChatOnly,
+        cmdArgs,
+        tempDir,
+        promptForAgent,
+        configDir,
+        abortController.signal,
+      ),
     abortController.signal,
   );
-  const syncLatency = Date.now() - syncStart;
-  reportRequestEnd(configDir);
 
-  if (out.stderr && isRateLimited(out.stderr)) {
-    reportRateLimit(configDir, 60000);
+  if (outcome.status === "aborted") {
+    return;
   }
 
-  if (out.code !== 0) {
-    reportRequestError(configDir, syncLatency);
+  if (outcome.status === "all_rate_limited") {
+    logAccountStats(config.verbose, getAccountStats());
+    if (outcome.result) {
+      logAgentError(
+        config.sessionsLogPath,
+        method,
+        pathname,
+        remoteAddress,
+        outcome.result.code,
+        outcome.result.stderr ?? "",
+      );
+    }
+    json(res, 429, {
+      error: {
+        type: "rate_limit_error",
+        message: ALL_ACCOUNTS_RATE_LIMITED_MESSAGE,
+      },
+    });
+    return;
+  }
+
+  if (outcome.status === "all_disabled") {
+    logAccountStats(config.verbose, getAccountStats());
+    json(res, 403, {
+      error: {
+        type: "invalid_request_error",
+        message: ALL_ACCOUNTS_DISABLED_MESSAGE,
+      },
+    });
+    return;
+  }
+
+  if (outcome.status === "error") {
     logAccountStats(config.verbose, getAccountStats());
     const errMsg = logAgentError(
       config.sessionsLogPath,
       method,
       pathname,
       remoteAddress,
-      out.code,
-      out.stderr,
+      outcome.result.code,
+      outcome.result.stderr ?? "",
     );
     json(res, 500, {
       error: { type: "api_error", message: errMsg, code: "cursor_cli_error" },
@@ -467,8 +565,7 @@ export async function handleAnthropicMessages(
     return;
   }
 
-  reportRequestSuccess(configDir, syncLatency);
-  const content = out.stdout.trim();
+  const content = (outcome.result.stdout ?? "").trim();
   logTrafficResponse(config.verbose, model ?? cursorModel, content, false);
   logAccountStats(config.verbose, getAccountStats());
   const inTok = Math.max(1, Math.round(agentPrompt.length / 4));

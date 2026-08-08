@@ -8,6 +8,9 @@ type AccountStatus = {
   totalErrors: number;
   totalRateLimits: number;
   totalLatencyMs: number;
+  disabled: boolean;
+  disabledReason: string;
+  disabledAt: number;
 };
 
 export type AccountStat = {
@@ -20,6 +23,20 @@ export type AccountStat = {
   totalLatencyMs: number;
   isRateLimited: boolean;
   rateLimitUntil: number;
+  isDisabled: boolean;
+  disabledReason: string;
+  disabledAt: number;
+};
+
+export type GetNextConfigDirOptions = {
+  /** Config dirs already tried in this request (e.g. hit rate limit). */
+  exclude?: ReadonlySet<string>;
+  /**
+   * When true (default false), if every account is rate-limited, pick the one
+   * that recovers soonest. Failover paths leave this false so the caller can
+   * return an error instead of forcing a doomed attempt.
+   */
+  allowRateLimitedFallback?: boolean;
 };
 
 export class AccountPool {
@@ -36,29 +53,48 @@ export class AccountPool {
       totalErrors: 0,
       totalRateLimits: 0,
       totalLatencyMs: 0,
+      disabled: false,
+      disabledReason: "",
+      disabledAt: 0,
     }));
   }
 
   /**
    * Get the least busy account using a combination of active requests and round-robin.
-   * Ignores accounts that are currently rate limited.
+   * Never returns permanently disabled accounts. Among the rest, ignores accounts
+   * that are currently rate limited (unless allowRateLimitedFallback).
    */
-  public getNextConfigDir(): string | undefined {
+  public getNextConfigDir(
+    options: GetNextConfigDirOptions = {},
+  ): string | undefined {
     if (this.accounts.length === 0) {
       return undefined;
     }
 
     const now = Date.now();
+    const exclude = options.exclude;
+    const allowRateLimitedFallback = options.allowRateLimitedFallback ?? false;
 
-    // Filter out rate-limited accounts (unless they are all rate-limited, then just use the one that recovers soonest)
-    const availableAccounts = this.accounts.filter(
+    const notExcluded = (exclude?.size
+      ? this.accounts.filter((a) => !exclude.has(a.configDir))
+      : this.accounts
+    ).filter((a) => !a.disabled);
+
+    if (notExcluded.length === 0) {
+      return undefined;
+    }
+
+    const availableAccounts = notExcluded.filter(
       (a) => a.rateLimitUntil < now,
     );
 
     let targetAccounts = availableAccounts;
     if (availableAccounts.length === 0) {
+      if (!allowRateLimitedFallback) {
+        return undefined;
+      }
       // If all are rate limited, sort by who recovers first
-      targetAccounts = [...this.accounts].sort(
+      targetAccounts = [...notExcluded].sort(
         (a, b) => a.rateLimitUntil - b.rateLimitUntil,
       );
     }
@@ -120,6 +156,30 @@ export class AccountPool {
     }
   }
 
+  public reportAccountDisabled(configDir?: string, reason?: string): void {
+    if (!configDir) return;
+    const account = this.accounts.find((a) => a.configDir === configDir);
+    if (account) {
+      account.disabled = true;
+      account.disabledReason = reason ?? "";
+      account.disabledAt = Date.now();
+    }
+  }
+
+  public reportAccountEnabled(configDir?: string): void {
+    if (!configDir) return;
+    const account = this.accounts.find((a) => a.configDir === configDir);
+    if (account) {
+      account.disabled = false;
+      account.disabledReason = "";
+      account.disabledAt = 0;
+    }
+  }
+
+  public getUsableCount(): number {
+    return this.accounts.filter((a) => !a.disabled).length;
+  }
+
   public getStats(): AccountStat[] {
     const now = Date.now();
     return this.accounts.map((a) => ({
@@ -132,6 +192,9 @@ export class AccountPool {
       totalLatencyMs: a.totalLatencyMs,
       isRateLimited: a.rateLimitUntil > now,
       rateLimitUntil: a.rateLimitUntil,
+      isDisabled: a.disabled,
+      disabledReason: a.disabledReason,
+      disabledAt: a.disabledAt,
     }));
   }
 
@@ -147,9 +210,11 @@ export function initAccountPool(configDirs: string[]) {
   globalPool = new AccountPool(configDirs);
 }
 
-export function getNextAccountConfigDir(): string | undefined {
+export function getNextAccountConfigDir(
+  options?: GetNextConfigDirOptions,
+): string | undefined {
   if (!globalPool) return undefined;
-  return globalPool.getNextConfigDir();
+  return globalPool.getNextConfigDir(options);
 }
 
 export function reportRequestStart(configDir?: string): void {
@@ -168,6 +233,25 @@ export function reportRateLimit(configDir?: string, penaltyMs?: number): void {
   if (globalPool) {
     globalPool.reportRateLimit(configDir, penaltyMs);
   }
+}
+
+export function reportAccountDisabled(
+  configDir?: string,
+  reason?: string,
+): void {
+  if (globalPool) {
+    globalPool.reportAccountDisabled(configDir, reason);
+  }
+}
+
+export function reportAccountEnabled(configDir?: string): void {
+  if (globalPool) {
+    globalPool.reportAccountEnabled(configDir);
+  }
+}
+
+export function getUsableCount(): number {
+  return globalPool?.getUsableCount() ?? 0;
 }
 
 export function reportRequestSuccess(
@@ -190,4 +274,8 @@ export function reportRequestError(
 
 export function getAccountStats(): AccountStat[] {
   return globalPool?.getStats() ?? [];
+}
+
+export function getAccountPoolSize(): number {
+  return globalPool?.getConfigDirsCount() ?? 0;
 }
