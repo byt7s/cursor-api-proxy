@@ -201,10 +201,10 @@ export function printHelp(version: string): void {
   console.log("");
   console.log("Commands:");
   console.log(
-    "  login [name]              Log into a Cursor account (saved to ~/.cursor-api-proxy/accounts/)",
+    "  login [name]              Add a Cursor account (interactive: CLI browser login or API key)",
   );
   console.log(
-    "  login [name] --proxy=...  Same, but open Chrome through a random proxy from a comma-separated list",
+    "  login [name] --proxy=...  CLI login via a random proxy from a comma-separated list",
   );
   console.log("  logout <name>             Remove a saved Cursor account");
   console.log("  accounts                  List saved accounts with plan info");

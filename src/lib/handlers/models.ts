@@ -1,5 +1,6 @@
 import * as http from "node:http";
 
+import { readAccountApiKey } from "../account-api-key.js";
 import type { BridgeConfig } from "../config.js";
 import type { CursorCliModel } from "../cursor-cli.js";
 import { listCursorCliModels } from "../cursor-cli.js";
@@ -19,6 +20,15 @@ export type HandleModelsOpts = {
   modelCacheRef: ModelCacheRef;
 };
 
+/** Prefer an account that already has an API key; else first pool dir. */
+export function pickConfigDirForModels(
+  configDirs: string[] | undefined,
+): string | undefined {
+  if (!configDirs?.length) return undefined;
+  const withKey = configDirs.find((dir) => Boolean(readAccountApiKey(dir)));
+  return withKey ?? configDirs[0];
+}
+
 export async function getCachedCursorModels(
   config: BridgeConfig,
   modelCacheRef: ModelCacheRef,
@@ -30,9 +40,11 @@ export async function getCachedCursorModels(
   ) {
     // Deduplicate concurrent fetches — reuse a single in-flight promise
     if (!modelCacheRef.inflight) {
+      const configDir = pickConfigDirForModels(config.configDirs);
       modelCacheRef.inflight = listCursorCliModels({
         agentBin: config.agentBin,
         timeoutMs: 60_000,
+        configDir,
       }).then(
         (models) => {
           // Never cache an empty catalog — usually a parse/env glitch
