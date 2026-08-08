@@ -1,8 +1,10 @@
 import fs from "node:fs";
 import path from "node:path";
+import readline from "node:readline";
 import { spawn } from "node:child_process";
 import { launch as launchChrome } from "chrome-launcher";
 
+import { writeApiKeyAccount } from "../lib/account-api-key.js";
 import { loadEnvConfig, resolveAgentCommand } from "../lib/env.js";
 import { ACCOUNTS_DIR } from "./constants.js";
 import { readKeychainToken, writeCachedToken } from "./usage.js";
@@ -46,11 +48,125 @@ async function openIncognito(url: string, proxies: string[]): Promise<void> {
   }
 }
 
-// ---------------------------------------------------------------------------
-// Command
-// ---------------------------------------------------------------------------
+function promptLine(question: string): Promise<string> {
+  const rl = readline.createInterface({
+    input: process.stdin,
+    output: process.stdout,
+  });
+  return new Promise((resolve) => {
+    rl.question(question, (answer) => {
+      rl.close();
+      resolve(answer.trim());
+    });
+  });
+}
 
-export async function handleLogin(
+/** Prompt for a secret; hides typed characters when stdin is a TTY. */
+export function promptSecret(question: string): Promise<string> {
+  if (!process.stdin.isTTY || !process.stdout.isTTY) {
+    return promptLine(question);
+  }
+
+  return new Promise((resolve, reject) => {
+    const stdin = process.stdin;
+    const stdout = process.stdout;
+    stdout.write(question);
+
+    const wasRaw = stdin.isRaw;
+    stdin.setRawMode?.(true);
+    stdin.resume();
+    stdin.setEncoding("utf8");
+
+    let value = "";
+
+    const cleanup = () => {
+      stdin.removeListener("data", onData);
+      stdin.setRawMode?.(wasRaw ?? false);
+      stdin.pause();
+    };
+
+    const onData = (chunk: string) => {
+      for (const ch of chunk) {
+        if (ch === "\n" || ch === "\r" || ch === "\u0004") {
+          cleanup();
+          stdout.write("\n");
+          resolve(value.trim());
+          return;
+        }
+        if (ch === "\u0003") {
+          cleanup();
+          stdout.write("\n");
+          reject(new Error("Login cancelled"));
+          return;
+        }
+        if (ch === "\u007f" || ch === "\b") {
+          if (value.length > 0) {
+            value = value.slice(0, -1);
+            stdout.write("\b \b");
+          }
+          continue;
+        }
+        if (ch < " " || ch === "\u001b") continue;
+        value += ch;
+        stdout.write("*");
+      }
+    };
+
+    stdin.on("data", onData);
+  });
+}
+
+export async function promptLoginMethod(): Promise<"cli" | "api-key"> {
+  console.log("How do you want to authenticate this account?");
+  console.log("  [1] Cursor CLI (browser login)");
+  console.log(
+    "  [2] API key (paste a key from https://cursor.com/dashboard/api)",
+  );
+
+  for (;;) {
+    const choice = await promptLine("Choice [1/2]: ");
+    if (choice === "1" || choice.toLowerCase() === "cli") return "cli";
+    if (choice === "2" || choice.toLowerCase() === "api-key" || choice.toLowerCase() === "key") {
+      return "api-key";
+    }
+    console.log("Please enter 1 or 2.");
+  }
+}
+
+/**
+ * Persist an API-key account (testable without TTY).
+ */
+export function saveApiKeyAccount(
+  accountName: string,
+  apiKey: string,
+): { name: string; configDir: string } {
+  const name = accountName || `account-${Date.now().toString().slice(-4)}`;
+  const configDir = path.join(ACCOUNTS_DIR, name);
+  fs.mkdirSync(ACCOUNTS_DIR, { recursive: true });
+  writeApiKeyAccount(configDir, name, apiKey);
+  return { name, configDir };
+}
+
+async function handleLoginWithApiKey(accountName: string): Promise<void> {
+  const name = accountName || `account-${Date.now().toString().slice(-4)}`;
+  const configDir = path.join(ACCOUNTS_DIR, name);
+
+  console.log(`🔑 Adding Cursor API key account: ${name}`);
+  console.log(`📁 Config: ${configDir}`);
+  console.log("");
+
+  const key = await promptSecret("Paste API key (input hidden): ");
+  if (!key) {
+    throw new Error("API key must not be empty");
+  }
+
+  saveApiKeyAccount(name, key);
+  console.log(
+    `\n✅ Account '${name}' saved with API key — it will be auto-discovered when you start the proxy.`,
+  );
+}
+
+async function handleLoginWithCli(
   accountName: string,
   proxies: string[] = [],
 ): Promise<void> {
@@ -95,7 +211,6 @@ export async function handleLogin(
       windowsVerbatimArguments: resolved.windowsVerbatimArguments,
     });
 
-    // Remove all signal handlers once the child exits (success or failure)
     const onCancel = (signal: string) => {
       child.kill();
       cleanupDir();
@@ -121,7 +236,6 @@ export async function handleLogin(
       process.stdout.write(text);
       stdoutBuffer += text;
 
-      // The agent prints the login URL across multiple chunks — buffer until complete
       if (
         !browserOpened &&
         stdoutBuffer.includes("https://cursor.com/loginDeepControl")
@@ -155,8 +269,6 @@ export async function handleLogin(
     child.on("exit", (code: number | null) => {
       removeSignalHandlers();
       if (code === 0) {
-        // Immediately cache the keychain token for this account so that
-        // 'accounts list' can show live usage without needing a prior request.
         const token = readKeychainToken();
         if (token) writeCachedToken(configDir, token);
 
@@ -171,4 +283,28 @@ export async function handleLogin(
       }
     });
   });
+}
+
+// ---------------------------------------------------------------------------
+// Command
+// ---------------------------------------------------------------------------
+
+export async function handleLogin(
+  accountName: string,
+  proxies: string[] = [],
+): Promise<void> {
+  const name = accountName || `account-${Date.now().toString().slice(-4)}`;
+
+  console.log(`🔑 Cursor account: ${name}`);
+  console.log("");
+
+  const method = await promptLoginMethod();
+  console.log("");
+
+  if (method === "api-key") {
+    await handleLoginWithApiKey(name);
+    return;
+  }
+
+  await handleLoginWithCli(name, proxies);
 }

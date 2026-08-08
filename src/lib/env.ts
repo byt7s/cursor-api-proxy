@@ -248,6 +248,16 @@ function resolveCmdFallback(
  * Auto-discovers configuration directories located inside ~/.cursor-api-proxy/accounts/
  */
 function isAuthenticatedAccountDir(dir: string): boolean {
+  // API-key accounts may be discovered via the key file alone.
+  if (fs.existsSync(path.join(dir, ".cursor-api-key"))) {
+    try {
+      const key = fs.readFileSync(path.join(dir, ".cursor-api-key"), "utf-8").trim();
+      if (key) return true;
+    } catch {
+      /* fall through */
+    }
+  }
+
   const configFile = path.join(dir, "cli-config.json");
   if (!fs.existsSync(configFile)) return false;
   try {
