@@ -246,6 +246,24 @@ describe("admin dashboard HTTP APIs", () => {
     expect(page.body).toContain("/static/dashboard/assets/");
   });
 
+  it("serves the same SPA shell on GET /wiki", async () => {
+    const server = await start(createTestConfig({ requiredKey: "bridge-secret" }));
+    const root = await fetchServer(server, "/");
+    const wiki = await fetchServer(server, "/wiki");
+    expect(wiki.status).toBe(200);
+    expect(wiki.body).toBe(root.body);
+  });
+
+  it("serves built dashboard assets under /static/dashboard/", async () => {
+    const server = await start(createTestConfig({ requiredKey: "bridge-secret" }));
+    const shell = await fetchServer(server, "/");
+    const asset = /\/static\/(dashboard\/assets\/[\w.-]+\.js)/.exec(shell.body);
+    expect(asset).not.toBeNull();
+    const script = await fetchServer(server, `/static/${asset?.[1]}`);
+    expect(script.status).toBe(200);
+    expect(script.body.length).toBeGreaterThan(0);
+  });
+
   it("POST /api/accounts creates an API-key account without echoing the key", async () => {
     const server = await start(createTestConfig({ requiredKey: "bridge-secret" }));
     const res = await fetchServer(server, "/api/accounts", {
