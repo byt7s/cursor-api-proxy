@@ -61,6 +61,14 @@ const KEYS = [
     editable: true,
   },
   {
+    key: "modelAliases",
+    env: "CURSOR_BRIDGE_MODEL_ALIASES",
+    type: "object",
+    group: "Models",
+    label: "Model aliases",
+    editable: true,
+  },
+  {
     key: "mode",
     env: "CURSOR_BRIDGE_MODE",
     type: "enum",
@@ -82,12 +90,16 @@ const KEYS = [
 const FILE = {
   path: "/home/me/.cursor-api-proxy/config.json",
   exists: true,
-  values: { defaultModel: "gpt-5" },
+  values: {
+    defaultModel: "gpt-5",
+    modelAliases: { "gpt-4o": "composer-2" },
+  },
   warnings: [],
   sources: {
     port: "env",
     tlsCertPath: "default",
     defaultModel: "file",
+    modelAliases: "file",
     mode: "default",
     toolCalls: "default",
   },
@@ -97,7 +109,7 @@ const FILE = {
     defaultModel: "gpt-5",
     mode: "ask",
     toolCalls: false,
-    modelAliases: {},
+    modelAliases: { "gpt-4o": "composer-2" },
   },
   keys: KEYS,
   refusedKeys: ["apiKey", "dashboardKey"],
@@ -139,7 +151,7 @@ describe("ConfigPage", () => {
 
     await screen.findByText("Server — config file");
     expect(screen.getByText("env")).toBeVisible();
-    expect(screen.getByText("file")).toBeVisible();
+    expect(screen.getAllByText("file").length).toBeGreaterThan(0);
     // `default` appears for several keys, so assert on the count, not identity.
     expect(screen.getAllByText("default").length).toBeGreaterThan(0);
   });
@@ -186,7 +198,12 @@ describe("ConfigPage", () => {
     ).toBeVisible();
 
     const put = fetchMock.calls.find((call) => call.method === "PUT");
-    expect(put?.body).toEqual({ values: { defaultModel: "gpt-6" } });
+    expect(put?.body).toMatchObject({
+      values: {
+        defaultModel: expect.stringMatching(/gpt-6/),
+        modelAliases: { "gpt-4o": "composer-2" },
+      },
+    });
   });
 
   it("reports a rejected key without pretending the write succeeded", async () => {
@@ -242,5 +259,16 @@ describe("ConfigPage", () => {
 
     await userEvent.click(screen.getByRole("checkbox"));
     await waitFor(() => expect(save).toBeEnabled());
+  });
+
+  it("renders modelAliases as an editable JSON object field", async () => {
+    mockFetch(routes());
+    renderWithProviders(<ConfigPage />);
+
+    await screen.findByText("Models — config file");
+    expect(screen.getAllByText("Model aliases").length).toBeGreaterThan(0);
+    expect(
+      screen.getByDisplayValue(/"gpt-4o"\s*:\s*"composer-2"/),
+    ).toBeVisible();
   });
 });

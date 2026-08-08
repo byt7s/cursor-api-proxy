@@ -177,4 +177,58 @@ describe("AccountsPage", () => {
       await screen.findByText(/Remove failed: Account 'work' not found/),
     ).toBeVisible();
   });
+
+  it("shows unrestricted models badge and saves an allowlist", async () => {
+    const fetchMock = mockFetch({
+      ...listRoute,
+      "GET /api/accounts/work/models": {
+        body: {
+          name: "work",
+          allowedModels: ["composer-2"],
+          unrestricted: false,
+        },
+      },
+      "PUT /api/accounts/work/models": {
+        body: {
+          ok: true,
+          name: "work",
+          allowedModels: ["composer-2", "sonnet-4.6"],
+          unrestricted: false,
+        },
+      },
+    });
+    renderWithProviders(<AccountsPage />);
+    await screen.findByRole("cell", { name: "work" });
+    expect(screen.getByText("all")).toBeVisible();
+
+    const names = screen.getAllByLabelText(/Account name/);
+    await userEvent.type(names[names.length - 1]!, "work");
+    await userEvent.click(screen.getByRole("button", { name: "Load" }));
+    await waitFor(() =>
+      expect(
+        fetchMock.calls.some((c) => c.url === "/api/accounts/work/models"),
+      ).toBe(true),
+    );
+
+    const textarea = screen.getByPlaceholderText(/composer-2/);
+    await userEvent.clear(textarea);
+    await userEvent.type(textarea, "composer-2\nsonnet-4.6");
+    await userEvent.click(
+      screen.getByRole("button", { name: "Save allowlist" }),
+    );
+
+    await waitFor(() =>
+      expect(
+        fetchMock.calls.some(
+          (c) => c.method === "PUT" && c.url === "/api/accounts/work/models",
+        ),
+      ).toBe(true),
+    );
+    const put = fetchMock.calls.find(
+      (c) => c.method === "PUT" && c.url === "/api/accounts/work/models",
+    );
+    expect(put?.body).toEqual({
+      allowedModels: ["composer-2", "sonnet-4.6"],
+    });
+  });
 });
