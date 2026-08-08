@@ -413,6 +413,89 @@ describe("admin dashboard HTTP APIs", () => {
     fs.rmSync(logPath, { force: true });
   });
 
+  it("GET /api/requests serves structured records from the JSONL log", async () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), "cap-admin-jsonl-"));
+    const requestsLogPath = path.join(dir, "requests.jsonl");
+    fs.writeFileSync(
+      requestsLogPath,
+      `${JSON.stringify({
+        ts: "2026-08-08T00:00:00.000Z",
+        method: "POST",
+        pathname: "/v1/chat/completions",
+        remoteAddress: "127.0.0.1",
+        status: 503,
+        durationMs: 1234,
+        model: "auto",
+        engine: "acp",
+        account: "work",
+        streaming: true,
+        errorCode: "agent_capacity",
+        failoverCount: 1,
+        spans: { account_select: 3, model_first_byte: 900, total: 1234 },
+      })}\n`,
+      "utf8",
+    );
+    const server = await start(
+      createTestConfig({ requestsLogEnabled: true, requestsLogPath }),
+    );
+
+    const ok = await fetchServer(server, "/api/requests?limit=10");
+    expect(ok.status).toBe(200);
+    const body = ok.json as {
+      path: string;
+      source: string;
+      requests: Array<Record<string, unknown>>;
+    };
+    expect(body.source).toBe("jsonl");
+    expect(body.path).toBe(requestsLogPath);
+    expect(body.requests[0]).toMatchObject({
+      method: "POST",
+      pathname: "/v1/chat/completions",
+      status: 503,
+      durationMs: 1234,
+      model: "auto",
+      engine: "acp",
+      account: "work",
+      errorCode: "agent_capacity",
+      spans: { account_select: 3, model_first_byte: 900, total: 1234 },
+    });
+    fs.rmSync(dir, { recursive: true, force: true });
+  });
+
+  it("GET /api/requests falls back to the text log when the JSONL log is empty", async () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), "cap-admin-fallback-"));
+    const sessionsLogPath = path.join(dir, "sessions.log");
+    fs.writeFileSync(
+      sessionsLogPath,
+      `2026-08-08T00:00:00.000Z GET /healthz 127.0.0.1 200\n`,
+      "utf8",
+    );
+    const server = await start(
+      createTestConfig({
+        sessionsLogPath,
+        requestsLogEnabled: true,
+        // Enabled but never written to yet.
+        requestsLogPath: path.join(dir, "missing.jsonl"),
+      }),
+    );
+
+    const ok = await fetchServer(server, "/api/requests?limit=10");
+    expect(ok.status).toBe(200);
+    const body = ok.json as {
+      path: string;
+      source: string;
+      requests: Array<Record<string, unknown>>;
+    };
+    expect(body.source).toBe("text");
+    expect(body.path).toBe(sessionsLogPath);
+    expect(body.requests[0]).toMatchObject({
+      method: "GET",
+      pathname: "/healthz",
+      status: 200,
+    });
+    fs.rmSync(dir, { recursive: true, force: true });
+  });
+
   it("allows loopback POST /api/accounts without bearer when requiredKey unset", async () => {
     const server = await start(createTestConfig({ requiredKey: undefined }));
     const res = await fetchServer(server, "/api/accounts", {
