@@ -17,6 +17,7 @@ describe("parseArgs", () => {
     resetHwid: false,
     deepClean: false,
     dryRun: false,
+    doctor: false,
     verbose: false,
     requests: false,
     requestLimit: 20,
@@ -172,6 +173,20 @@ describe("parseArgs", () => {
       login: false,
       logout: false,
       accountsList: true,
+      accountName: "",
+      proxies: [],
+    });
+  });
+
+  it("parses doctor", () => {
+    expect(parseArgs(["doctor"])).toEqual({
+      ...base,
+      doctor: true,
+      tailscale: false,
+      help: false,
+      login: false,
+      logout: false,
+      accountsList: false,
       accountName: "",
       proxies: [],
     });
