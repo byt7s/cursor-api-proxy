@@ -59,6 +59,7 @@ function config(overrides: Partial<BridgeConfig> = {}): BridgeConfig {
     admissionWaitMs: 0,
     latencyWaterfall: true,
     thoughtMode: "drop",
+    toolCalls: false,
     ...overrides,
   };
 }
