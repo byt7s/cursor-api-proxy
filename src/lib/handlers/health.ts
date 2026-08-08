@@ -1,5 +1,6 @@
 import * as http from "node:http";
 
+import { getAdmissionConfig, getAdmissionSnapshot } from "../admission.js";
 import type { BridgeConfig } from "../config.js";
 import { json } from "../http.js";
 
@@ -13,6 +14,7 @@ export function handleHealth(
   opts: HealthHandlerOpts,
 ): void {
   const { version, config } = opts;
+  const admissionCfg = getAdmissionConfig();
   // mode: default for Cursor CLI; clients may override per request (body.mode, X-Cursor-Mode).
   json(res, 200, {
     ok: true,
@@ -24,5 +26,9 @@ export function handleHealth(
     force: config.force,
     approveMcps: config.approveMcps,
     strictModel: config.strictModel,
+    admission: {
+      ...admissionCfg,
+      ...getAdmissionSnapshot(),
+    },
   });
 }

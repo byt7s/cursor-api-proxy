@@ -212,6 +212,9 @@ Environment handling is centralized in one module. Aliases, defaults, path resol
 | `CURSOR_CONFIG_DIRS` | — | Comma-separated configuration directories for round-robin account rotation (alias: `CURSOR_ACCOUNT_DIRS`). Auto-discovers authenticated accounts under `~/.cursor-api-proxy/accounts/` when unset. |
 | `CURSOR_BRIDGE_MULTI_PORT` | `false` | When `true` and multiple config dirs are set, spawns a separate server per directory on incrementing ports starting from `CURSOR_BRIDGE_PORT`. |
 | `CURSOR_BRIDGE_PROMPT_VIA_STDIN` | `false` | When `true`, sends the user prompt via **stdin** instead of argv (helps on Windows if argv is truncated). |
+| `CURSOR_BRIDGE_MAX_CONCURRENT_RUNS` | `16` | Max concurrent agent runs (ACP/CLI children) across the whole proxy. Extra requests wait up to `CURSOR_BRIDGE_ADMISSION_WAIT_MS`, then get **503** with `Retry-After`. |
+| `CURSOR_BRIDGE_MAX_CONCURRENT_RUNS_PER_ACCOUNT` | `2` | Max concurrent runs **per account** dir. Usual bottleneck with few accounts — raise to `3`–`4` only if you have RAM headroom; prefer more accounts over a high per-account cap. |
+| `CURSOR_BRIDGE_ADMISSION_WAIT_MS` | `5000` | How long to wait for an admission permit before failing with capacity **503**. |
 | `CURSOR_BRIDGE_USE_ACP` | `false` | When `true`, uses **ACP (Agent Client Protocol)** over stdio (`agent acp`). Avoids Windows argv limits. See [Cursor ACP docs](https://cursor.com/docs/cli/acp). Set `NODE_DEBUG=cursor-api-proxy:acp` to debug. |
 | `CURSOR_BRIDGE_ACP_SKIP_AUTHENTICATE` | auto | When `CURSOR_API_KEY` is set, skips the ACP authenticate step. Set to `true` to skip when using `agent login` instead. |
 | `CURSOR_BRIDGE_ACP_RAW_DEBUG` | `false` | When `1` or `true`, log raw JSON-RPC from ACP stdout (requires `NODE_DEBUG=cursor-api-proxy:acp`). |
@@ -225,6 +228,7 @@ Notes:
 - `--tailscale` changes the default host to `0.0.0.0` only when `CURSOR_BRIDGE_HOST` is not already set.
 - ACP `session/request_permission` uses `reject-once` (least-privilege) so the agent cannot grant file/tool access; intentional for chat-only mode.
 - Relative paths such as `CURSOR_BRIDGE_WORKSPACE`, `CURSOR_BRIDGE_SESSIONS_LOG`, `CURSOR_BRIDGE_TLS_CERT`, and `CURSOR_BRIDGE_TLS_KEY` are resolved from the current working directory.
+- **Admission tuning:** defaults (`16` global / `2` per account) assume heavy ACP/CLI children. If parallel prompts hit **503** / admission capacity, raise `CURSOR_BRIDGE_MAX_CONCURRENT_RUNS_PER_ACCOUNT` modestly **or** add accounts (spreads Cursor rate limits). Raising caps without RAM headroom OOMs the host; many parallel runs on one account also hit upstream rate limits faster. `GET /healthz` (or the admin dashboard) exposes current admission limits and in-use counts.
 
 #### Windows command line limits
 

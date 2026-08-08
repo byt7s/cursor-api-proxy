@@ -18,6 +18,10 @@ import {
 import type { BridgeConfig } from "../config.js";
 import type { CursorExecutionMode } from "../execution-mode.js";
 import { json, writeSseHeaders } from "../http.js";
+import {
+  AdmissionCapacityError,
+  AGENT_CAPACITY_MESSAGE,
+} from "../admission.js";
 import { runAgentStream, runAgentSync } from "../agent-runner.js";
 import { createStreamParser } from "../cli-stream-parser.js";
 import { resolveModelForExecution } from "../model-map.js";
@@ -511,6 +515,21 @@ export async function handleResponses(
         if (!abortController.signal.aborted) {
           reportRequestError(configDir, Date.now() - streamStart);
         }
+        if (err instanceof AdmissionCapacityError) {
+          const retryAfterSec = Math.max(1, Math.ceil(err.retryAfterMs / 1000));
+          res.write(
+            `data: ${JSON.stringify({
+              error: {
+                message: AGENT_CAPACITY_MESSAGE,
+                code: "agent_capacity",
+                retry_after_ms: err.retryAfterMs,
+              },
+            })}\n\n`,
+          );
+          res.write("data: [DONE]\n\n");
+          res.end();
+          return;
+        }
         console.error(
           `[${new Date().toISOString()}] Agent stream error:`,
           err,
@@ -528,16 +547,37 @@ export async function handleResponses(
   const abortController = new AbortController();
   abortOnClientDisconnect(res, abortController);
 
-  const out = await runAgentSync(
-    config,
-    workspaceDir,
-    effectiveChatOnly,
-    cmdArgs,
-    tempDir,
-    promptForAgent,
-    configDir,
-    abortController.signal,
-  );
+  let out: Awaited<ReturnType<typeof runAgentSync>>;
+  try {
+    out = await runAgentSync(
+      config,
+      workspaceDir,
+      effectiveChatOnly,
+      cmdArgs,
+      tempDir,
+      promptForAgent,
+      configDir,
+      abortController.signal,
+    );
+  } catch (err) {
+    reportRequestEnd(configDir);
+    if (err instanceof AdmissionCapacityError) {
+      const retryAfterSec = Math.max(1, Math.ceil(err.retryAfterMs / 1000));
+      json(
+        res,
+        503,
+        {
+          error: {
+            message: AGENT_CAPACITY_MESSAGE,
+            code: "agent_capacity",
+          },
+        },
+        { "Retry-After": String(retryAfterSec) },
+      );
+      return;
+    }
+    throw err;
+  }
   const syncLatency = Date.now() - syncStart;
   reportRequestEnd(configDir);
 
