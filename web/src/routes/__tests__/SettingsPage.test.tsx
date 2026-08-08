@@ -9,6 +9,20 @@ import { DASHBOARD_KEY_STORAGE } from "../../lib/api";
 import { SETTINGS_STORAGE_KEY } from "../../hooks/useSettings";
 import { SettingsPage } from "../SettingsPage";
 
+const CONFIG_WITH_KEYS = {
+  apiKeys: [
+    { label: "ci", scope: "chat", fingerprint: "aaa111" },
+    { label: "ops", scope: "admin", fingerprint: "bbb222" },
+  ],
+  dashboardKeyConfigured: true,
+  keyRateLimitPerMin: 60,
+  auditLogPath: "/tmp/audit.jsonl",
+  auditLogEnabled: true,
+  maxBodyBytes: 8 * 1024 * 1024,
+  corsOrigins: [],
+  caller: { actor: "ops", fingerprint: "bbb222" },
+};
+
 describe("SettingsPage", () => {
   it("persists the dashboard key in sessionStorage and clears it again", async () => {
     mockFetch({});
@@ -33,6 +47,48 @@ describe("SettingsPage", () => {
     await userEvent.click(screen.getByRole("button", { name: "Clear" }));
     expect(window.sessionStorage.getItem(DASHBOARD_KEY_STORAGE)).toBeNull();
     expect(screen.getByLabelText(/CURSOR_BRIDGE_DASHBOARD_KEY/)).toHaveValue("");
+  });
+
+  it("lists configured keys by label, scope and fingerprint", async () => {
+    mockFetch({ "GET /api/config": { body: CONFIG_WITH_KEYS } });
+    renderWithProviders(<SettingsPage />);
+
+    expect(await screen.findByText("ci")).toBeVisible();
+    expect(screen.getByText("chat")).toBeVisible();
+    expect(screen.getByText("aaa111")).toBeVisible();
+    expect(screen.getByText("bbb222")).toBeVisible();
+    // "ops" also appears in the "authenticated as" line below the table.
+    expect(screen.getAllByText("ops").length).toBeGreaterThan(0);
+    expect(screen.getByText("admin")).toBeVisible();
+    expect(screen.getByText("dedicated dashboard key")).toBeVisible();
+  });
+
+  it("marks which key this browser is authenticated with", async () => {
+    mockFetch({ "GET /api/config": { body: CONFIG_WITH_KEYS } });
+    renderWithProviders(<SettingsPage />);
+
+    expect(await screen.findByText("this browser")).toBeVisible();
+    expect(
+      screen.getByText(/authenticated as/).textContent,
+    ).toContain("bbb222");
+  });
+
+  it("recommends a dedicated dashboard key when none is set", async () => {
+    mockFetch({
+      "GET /api/config": {
+        body: {
+          ...CONFIG_WITH_KEYS,
+          dashboardKeyConfigured: false,
+          caller: { actor: "loopback" },
+        },
+      },
+    });
+    renderWithProviders(<SettingsPage />);
+
+    expect(
+      await screen.findByText("Set a dedicated dashboard key"),
+    ).toBeVisible();
+    expect(screen.getByText("no dedicated dashboard key")).toBeVisible();
   });
 
   it("switches theme and stores the choice", async () => {

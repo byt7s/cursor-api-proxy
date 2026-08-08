@@ -30,6 +30,64 @@ describe("loadEnvConfig", () => {
     expect(loaded.contextPreamble).toBe(true);
   });
 
+  it("defaults the security settings to the pre-existing behaviour", () => {
+    const loaded = loadEnvConfig({ env: {}, cwd: "/workspace" });
+
+    expect(loaded.requiredKey).toBeUndefined();
+    expect(loaded.dashboardKey).toBeUndefined();
+    expect(loaded.apiKeys).toEqual([]);
+    expect(loaded.apiKeyWarnings).toEqual([]);
+    expect(loaded.keyRateLimitPerMin).toBe(0);
+    expect(loaded.auditLogEnabled).toBe(true);
+    expect(loaded.auditLogPath).toBe(path.join("/workspace", "audit.jsonl"));
+    expect(loaded.auditLogMaxBytes).toBe(8 * 1024 * 1024);
+    expect(loaded.maxBodyBytes).toBe(8 * 1024 * 1024);
+    expect(loaded.corsOrigins).toEqual([]);
+  });
+
+  it("reads the security settings from the environment", () => {
+    const loaded = loadEnvConfig({
+      env: {
+        HOME: "/home/me",
+        CURSOR_BRIDGE_API_KEY: "legacy-key",
+        CURSOR_BRIDGE_DASHBOARD_KEY: "dash-key",
+        CURSOR_BRIDGE_API_KEYS: "ci:chat:sk-ci,ops:admin:sk-ops,broken",
+        CURSOR_BRIDGE_KEY_RATE_LIMIT_PER_MIN: "30",
+        CURSOR_BRIDGE_AUDIT_LOG_ENABLED: "false",
+        CURSOR_BRIDGE_AUDIT_LOG_MAX_BYTES: "1024",
+        CURSOR_BRIDGE_MAX_BODY_BYTES: "2048",
+        CURSOR_BRIDGE_CORS_ORIGINS: "http://a.example, http://b.example/",
+      },
+      cwd: "/workspace",
+    });
+
+    expect(loaded.dashboardKey).toBe("dash-key");
+    expect(loaded.keyRateLimitPerMin).toBe(30);
+    expect(loaded.auditLogEnabled).toBe(false);
+    expect(loaded.auditLogMaxBytes).toBe(1024);
+    expect(loaded.maxBodyBytes).toBe(2048);
+    expect(loaded.corsOrigins).toEqual(["http://a.example", "http://b.example"]);
+    expect(loaded.auditLogPath).toBe(
+      path.join("/home/me", ".cursor-api-proxy", "audit.jsonl"),
+    );
+    // Legacy key first with chat scope, then the parsed entries; junk warns.
+    expect(loaded.apiKeys).toEqual([
+      { label: "default", scope: "chat", key: "legacy-key" },
+      { label: "ci", scope: "chat", key: "sk-ci" },
+      { label: "ops", scope: "admin", key: "sk-ops" },
+    ]);
+    expect(loaded.apiKeyWarnings).toHaveLength(1);
+  });
+
+  it("resolves a relative CURSOR_BRIDGE_AUDIT_LOG from the cwd", () => {
+    expect(
+      loadEnvConfig({
+        env: { CURSOR_BRIDGE_AUDIT_LOG: "logs/audit.jsonl" },
+        cwd: "/workspace",
+      }).auditLogPath,
+    ).toBe(path.join("/workspace", "logs", "audit.jsonl"));
+  });
+
   it("applies env aliases with expected precedence", () => {
     expect(
       loadEnvConfig({
