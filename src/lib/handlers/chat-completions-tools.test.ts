@@ -75,6 +75,14 @@ function createTestConfig(overrides: Partial<BridgeConfig> = {}): BridgeConfig {
     contextPreamble: false,
     bridgePackageVersion: "0.0.0-test",
     toolCalls: true,
+    defaultEngine: "acp",
+    sdkMaxConcurrentRuns: 48,
+    sdkMaxConcurrentRunsPerAccount: 12,
+    latencyWaterfall: false,
+    thoughtMode: "drop",
+    maxConcurrentRuns: 16,
+    maxConcurrentRunsPerAccount: 2,
+    admissionWaitMs: 0,
     ...overrides,
   };
 }

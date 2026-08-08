@@ -185,6 +185,11 @@ describe("dual-cred session token refresh", () => {
 describe("SDK engine path", () => {
   let tmp: string;
 
+  beforeEach(() => {
+    vi.mocked(runSdkAgent).mockClear();
+    vi.mocked(runAcpSync).mockClear();
+  });
+
   afterEach(() => {
     vi.mocked(runSdkAgent).mockClear();
     vi.mocked(runAcpSync).mockClear();

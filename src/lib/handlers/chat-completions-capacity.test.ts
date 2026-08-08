@@ -2,6 +2,7 @@ import * as http from "node:http";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { AdmissionCapacityError } from "../admission.js";
+import { initAccountPool } from "../account-pool.js";
 import type { BridgeConfig } from "../config.js";
 import { startBridgeServer } from "../server.js";
 
@@ -50,16 +51,22 @@ function createTestConfig(overrides: Partial<BridgeConfig> = {}): BridgeConfig {
     maxMode: false,
     promptViaStdin: false,
     useAcp: true,
+    defaultEngine: "acp",
     acpSkipAuthenticate: false,
     acpRawDebug: false,
-    configDirs: [],
+    configDirs: ["/only"],
     multiPort: false,
     winCmdlineMax: 30_000,
     contextPreamble: false,
     bridgePackageVersion: "0.0.0-test",
     maxConcurrentRuns: 16,
     maxConcurrentRunsPerAccount: 2,
+    sdkMaxConcurrentRuns: 48,
+    sdkMaxConcurrentRunsPerAccount: 12,
     admissionWaitMs: 0,
+    latencyWaterfall: false,
+    thoughtMode: "drop",
+    toolCalls: false,
     ...overrides,
   };
 }
@@ -97,10 +104,11 @@ async function fetchServer(
   });
 }
 
-describe("chat-completions agent_capacity", () => {
+describe("chat-completions capacity under account failover", () => {
   let servers: http.Server[] = [];
 
   beforeEach(() => {
+    initAccountPool(["/only"]);
     runAgentSync.mockReset();
     runAgentStream.mockReset();
   });
@@ -110,6 +118,7 @@ describe("chat-completions agent_capacity", () => {
       await new Promise((r) => s.close(r));
     }
     servers = [];
+    initAccountPool([]);
   });
 
   async function start(): Promise<http.Server> {
@@ -122,7 +131,8 @@ describe("chat-completions agent_capacity", () => {
     return servers[0]!;
   }
 
-  it("returns JSON 503 agent_capacity with Retry-After for non-stream", async () => {
+  it("returns 429 when every account is at admission capacity", async () => {
+    // Failover retries capacity errors; with one account the pool exhausts as rate-limited.
     runAgentSync.mockRejectedValue(new AdmissionCapacityError(2500));
     const server = await start();
     const res = await fetchServer(server, "/v1/chat/completions", {
@@ -133,26 +143,16 @@ describe("chat-completions agent_capacity", () => {
         messages: [{ role: "user", content: "hi" }],
       }),
     });
-    expect(res.status).toBe(503);
-    expect(res.headers["retry-after"]).toBe("3");
+    expect(res.status).toBe(429);
     expect(JSON.parse(res.body)).toMatchObject({
-      error: {
-        message: expect.stringContaining("capacity"),
-        code: "agent_capacity",
-      },
+      error: { code: "rate_limit_exceeded" },
     });
   });
 
-  it("emits SSE agent_capacity with retry_after_ms for stream", async () => {
+  it("returns stream 429 when every account is at admission capacity", async () => {
     runAgentStream.mockRejectedValue(new AdmissionCapacityError(1800));
-    // CLI stream path surfaces capacity; ACP stream path on this tip maps to cursor_cli_error.
-    const started = startBridgeServer({
-      version: "1.0.0",
-      config: createTestConfig({ useAcp: false }),
-    });
-    servers = started as http.Server[];
-    await new Promise<void>((resolve) => servers[0]!.on("listening", () => resolve()));
-    const res = await fetchServer(servers[0]!, "/v1/chat/completions", {
+    const server = await start();
+    const res = await fetchServer(server, "/v1/chat/completions", {
       method: "POST",
       headers: { "content-type": "application/json" },
       body: JSON.stringify({
@@ -161,9 +161,7 @@ describe("chat-completions agent_capacity", () => {
         messages: [{ role: "user", content: "hi" }],
       }),
     });
-    expect(res.status).toBe(200);
-    expect(res.body).toContain('"code":"agent_capacity"');
-    expect(res.body).toContain('"retry_after_ms":1800');
-    expect(res.body).toContain("data: [DONE]");
+    expect(res.status).toBe(429);
+    expect(res.body).toContain("rate_limit_exceeded");
   });
 });

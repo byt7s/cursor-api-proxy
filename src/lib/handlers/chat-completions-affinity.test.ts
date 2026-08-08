@@ -69,6 +69,8 @@ function createTestConfig(overrides: Partial<BridgeConfig> = {}): BridgeConfig {
     latencyWaterfall: false,
     thoughtMode: "drop",
     toolCalls: false,
+    sdkMaxConcurrentRuns: 48,
+    sdkMaxConcurrentRunsPerAccount: 12,
     ...overrides,
   };
 }
