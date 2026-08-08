@@ -148,6 +148,14 @@ describe("startBridgeServer", () => {
     expect(data.defaultModel).toBe("default");
     expect(data.mode).toBe("ask");
     expect(data.perRequestMode).toBe(true);
+    expect(data.admission).toMatchObject({
+      maxConcurrentRuns: 16,
+      maxConcurrentRunsPerAccount: 2,
+      waitMs: expect.any(Number),
+      globalInUse: 0,
+      waiting: 0,
+    });
+    expect(data.admission.perAccount).toEqual({});
   });
 
   it("responds 200 on GET /v1/models", async () => {
