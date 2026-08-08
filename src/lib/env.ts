@@ -62,6 +62,11 @@ export type LoadedEnv = {
    * From `CURSOR_BRIDGE_CONTEXT_EXTRA`; stripped of NUL, max 400 UTF-16 units.
    */
   contextExtra?: string;
+  /**
+   * When true, log a compact per-request latency waterfall line at request end.
+   * Default true (cheap one-line summary). Set CURSOR_BRIDGE_LATENCY_WATERFALL=false to disable.
+   */
+  latencyWaterfall: boolean;
 };
 
 export type AgentCommand = {
@@ -389,6 +394,7 @@ export function loadEnvConfig(opts: EnvOptions = {}): LoadedEnv {
     winCmdlineMax,
     contextPreamble,
     contextExtra,
+    latencyWaterfall: envBool(env, ["CURSOR_BRIDGE_LATENCY_WATERFALL"], true),
   };
 }
 

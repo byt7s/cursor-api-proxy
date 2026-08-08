@@ -73,6 +73,8 @@ export type BridgeConfig = {
   bridgePackageVersion: string;
   /** Optional operator notes appended to the preamble (see CURSOR_BRIDGE_CONTEXT_EXTRA). */
   contextExtra?: string;
+  /** Log compact per-request latency spans (see CURSOR_BRIDGE_LATENCY_WATERFALL). */
+  latencyWaterfall: boolean;
 };
 
 export function loadBridgeConfig(opts: EnvOptions = {}): BridgeConfig {
@@ -130,5 +132,6 @@ export function loadBridgeConfig(opts: EnvOptions = {}): BridgeConfig {
     contextPreamble: env.contextPreamble,
     bridgePackageVersion: readBridgePackageVersion(),
     contextExtra: env.contextExtra,
+    latencyWaterfall: env.latencyWaterfall,
   };
 }

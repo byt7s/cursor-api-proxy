@@ -44,9 +44,27 @@ import {
   fitPromptToWinCmdline,
   warnPromptTruncated,
 } from "../win-cmdline-limit.js";
+import { LatencyWaterfall } from "../latency-waterfall.js";
 
 function isRateLimited(stderr: string): boolean {
   return /\b429\b|rate.?limit|too many requests/i.test(stderr);
+}
+
+function logLatency(
+  config: BridgeConfig,
+  latency: LatencyWaterfall,
+  extra?: Record<string, unknown>,
+): void {
+  if (!config.latencyWaterfall) return;
+  latency.logLine(extra);
+}
+
+/** Approximate ACP/CLI ready → first token when finer agent marks are unavailable. */
+function markModelFirstByte(latency: LatencyWaterfall): void {
+  if (latency.has("model_first_byte")) return;
+  if (!latency.has("spawn_ready")) latency.mark("spawn_ready");
+  if (!latency.has("session_ready")) latency.mark("session_ready");
+  latency.mark("model_first_byte");
 }
 
 export type ChatCompletionsCtx = {
@@ -64,6 +82,7 @@ export async function handleChatCompletions(
   pathname: string,
   remoteAddress: string,
 ): Promise<void> {
+  const latency = new LatencyWaterfall();
   const { config, lastRequestedModelRef, modelCacheRef } = ctx;
   const body = JSON.parse(rawBody || "{}") as OpenAiChatCompletionRequest;
   const requested = normalizeModelId(body.model);
@@ -195,7 +214,10 @@ export async function handleChatCompletions(
     : undefined;
 
   if (body.stream) {
+    latency.mark("exec_start");
+    latency.mark("account_select_start");
     const configDir = getNextAccountConfigDir();
+    latency.mark("account_select_end");
     logAccountAssigned(configDir);
     reportRequestStart(configDir);
     const streamStart = Date.now();
@@ -210,12 +232,14 @@ export async function handleChatCompletions(
 
     if (config.useAcp && typeof promptForAgent === "string") {
       let accumulated = "";
+      latency.mark("spawn_start");
       runAgentStream(
         config,
         workspaceDir,
         effectiveChatOnly,
         cmdArgs,
         (chunk) => {
+          markModelFirstByte(latency);
           accumulated += chunk;
           res.write(
             `data: ${JSON.stringify({
@@ -243,6 +267,12 @@ export async function handleChatCompletions(
           }
 
           if (abortController.signal.aborted) {
+            latency.mark("shape_done");
+            logLatency(config, latency, {
+              ok: false,
+              aborted: true,
+              model: displayModel,
+            });
             /* client disconnected — do not count as success or failure */
           } else if (code !== 0) {
             reportRequestError(configDir, latencyMs);
@@ -261,11 +291,14 @@ export async function handleChatCompletions(
             );
             res.write("data: [DONE]\n\n");
             logAccountStats(config.verbose, getAccountStats());
+            latency.mark("shape_done");
+            logLatency(config, latency, { ok: false, model: displayModel });
             res.end();
             return;
           } else {
             reportRequestSuccess(configDir, latencyMs);
           }
+          if (!latency.has("model_complete")) latency.mark("model_complete");
           logAccountStats(config.verbose, getAccountStats());
           logTrafficResponse(
             config.verbose,
@@ -293,6 +326,8 @@ export async function handleChatCompletions(
             })}\n\n`,
           );
           res.write("data: [DONE]\n\n");
+          latency.mark("shape_done");
+          logLatency(config, latency, { ok: true, model: displayModel });
           res.end();
         })
         .catch((err) => {
@@ -314,6 +349,8 @@ export async function handleChatCompletions(
             `[${new Date().toISOString()}] Agent stream error:`,
             err,
           );
+          latency.mark("shape_done");
+          logLatency(config, latency, { ok: false, model: displayModel });
           res.end();
         });
       return;
@@ -322,6 +359,7 @@ export async function handleChatCompletions(
     let accumulated = "";
     const parseLine = createStreamParser(
       (text) => {
+        markModelFirstByte(latency);
         accumulated += text;
         res.write(
           `data: ${JSON.stringify({
@@ -336,6 +374,7 @@ export async function handleChatCompletions(
         );
       },
       () => {
+        if (!latency.has("model_complete")) latency.mark("model_complete");
         logTrafficResponse(
           config.verbose,
           model ?? cursorModel,
@@ -362,9 +401,12 @@ export async function handleChatCompletions(
           })}\n\n`,
         );
         res.write("data: [DONE]\n\n");
+        latency.mark("shape_done");
+        logLatency(config, latency, { ok: true, model: displayModel });
       },
     );
 
+    latency.mark("spawn_start");
     runAgentStream(
       config,
       workspaceDir,
@@ -396,8 +438,17 @@ export async function handleChatCompletions(
             code,
             stderrOut,
           );
+          if (!latency.has("shape_done")) {
+            latency.mark("shape_done");
+            logLatency(config, latency, { ok: false, model: displayModel });
+          }
         } else {
           reportRequestSuccess(configDir, latencyMs);
+          if (!latency.has("shape_done")) {
+            if (!latency.has("model_complete")) latency.mark("model_complete");
+            latency.mark("shape_done");
+            logLatency(config, latency, { ok: true, model: displayModel });
+          }
         }
         logAccountStats(config.verbose, getAccountStats());
         res.end();
@@ -411,12 +462,17 @@ export async function handleChatCompletions(
           `[${new Date().toISOString()}] Agent stream error:`,
           err,
         );
+        latency.mark("shape_done");
+        logLatency(config, latency, { ok: false, model: displayModel });
         res.end();
       });
     return;
   }
 
+  latency.mark("exec_start");
+  latency.mark("account_select_start");
   const configDir = getNextAccountConfigDir();
+  latency.mark("account_select_end");
   logAccountAssigned(configDir);
   reportRequestStart(configDir);
   const syncStart = Date.now();
@@ -424,6 +480,7 @@ export async function handleChatCompletions(
   const abortController = new AbortController();
   abortOnClientDisconnect(res, abortController);
 
+  latency.mark("spawn_start");
   const out = await runAgentSync(
     config,
     workspaceDir,
@@ -434,6 +491,9 @@ export async function handleChatCompletions(
     configDir,
     abortController.signal,
   );
+  if (!latency.has("spawn_ready")) latency.mark("spawn_ready");
+  if (!latency.has("session_ready")) latency.mark("session_ready");
+  if (!latency.has("model_first_byte")) latency.mark("model_first_byte");
   const syncLatency = Date.now() - syncStart;
   reportRequestEnd(configDir);
 
@@ -452,13 +512,23 @@ export async function handleChatCompletions(
       out.code,
       out.stderr,
     );
-    json(res, 500, {
-      error: { message: errMsg, code: "cursor_cli_error" },
-    });
+    latency.mark("shape_done");
+    logLatency(config, latency, { ok: false, model: displayModel });
+    json(
+      res,
+      500,
+      {
+        error: { message: errMsg, code: "cursor_cli_error" },
+      },
+      config.latencyWaterfall
+        ? { "X-Cursor-Proxy-Waterfall": latency.headerValue() }
+        : undefined,
+    );
     return;
   }
 
   reportRequestSuccess(configDir, syncLatency);
+  if (!latency.has("model_complete")) latency.mark("model_complete");
   const content = out.stdout.trim();
   logTrafficResponse(config.verbose, model ?? cursorModel, content, false);
 
@@ -466,7 +536,15 @@ export async function handleChatCompletions(
   const completionTokens = Math.max(1, Math.round(content.length / 4));
   const totalTokens = promptTokens + completionTokens;
 
+  latency.mark("shape_done");
+  logLatency(config, latency, { ok: true, model: displayModel });
   logAccountStats(config.verbose, getAccountStats());
+  const extraHeaders = {
+    ...(truncatedHeaders ?? {}),
+    ...(config.latencyWaterfall
+      ? { "X-Cursor-Proxy-Waterfall": latency.headerValue() }
+      : {}),
+  };
   json(
     res,
     200,
@@ -488,6 +566,6 @@ export async function handleChatCompletions(
         total_tokens: totalTokens,
       },
     },
-    truncatedHeaders,
+    Object.keys(extraHeaders).length > 0 ? extraHeaders : undefined,
   );
 }
