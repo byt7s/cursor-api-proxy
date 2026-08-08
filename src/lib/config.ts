@@ -73,6 +73,11 @@ export type BridgeConfig = {
   bridgePackageVersion: string;
   /** Optional operator notes appended to the preamble (see CURSOR_BRIDGE_CONTEXT_EXTRA). */
   contextExtra?: string;
+  /**
+   * Thought channel policy (CURSOR_BRIDGE_THOUGHT_MODE):
+   * drop (default) or map to OpenAI reasoning_content.
+   */
+  thoughtMode: "drop" | "reasoning";
 };
 
 export function loadBridgeConfig(opts: EnvOptions = {}): BridgeConfig {
@@ -130,5 +135,6 @@ export function loadBridgeConfig(opts: EnvOptions = {}): BridgeConfig {
     contextPreamble: env.contextPreamble,
     bridgePackageVersion: readBridgePackageVersion(),
     contextExtra: env.contextExtra,
+    thoughtMode: env.thoughtMode,
   };
 }

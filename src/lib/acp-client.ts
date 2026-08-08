@@ -506,6 +506,7 @@ export function runAcpSync(
 
 /**
  * Run a single prompt via ACP and stream response chunks via onChunk.
+ * Thought chunks are delivered separately via onThought (never mixed into onChunk).
  */
 export function runAcpStream(
   command: string,
@@ -513,6 +514,7 @@ export function runAcpStream(
   prompt: string,
   opts: AcpRunOptions,
   onChunk: (text: string) => void,
+  onThought?: (text: string) => void,
 ): Promise<AcpStreamResult> {
   const requestTimeoutMs = opts.requestTimeoutMs ?? DEFAULT_REQUEST_TIMEOUT_MS;
 
@@ -598,6 +600,7 @@ export function runAcpStream(
           rawDebug: opts.rawDebug,
           stdin: child.stdin,
           onAgentTextChunk: onChunk,
+          onAgentThoughtChunk: onThought,
         });
       } catch {
         /* ignore notification handler errors */

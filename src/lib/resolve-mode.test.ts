@@ -32,6 +32,7 @@ function base(overrides: Partial<BridgeConfig> = {}): BridgeConfig {
     winCmdlineMax: 30_000,
     contextPreamble: true,
     bridgePackageVersion: "0.0.0-test",
+    thoughtMode: "drop",
     ...overrides,
   };
 }

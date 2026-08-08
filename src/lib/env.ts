@@ -62,6 +62,13 @@ export type LoadedEnv = {
    * From `CURSOR_BRIDGE_CONTEXT_EXTRA`; stripped of NUL, max 400 UTF-16 units.
    */
   contextExtra?: string;
+  /**
+   * How to surface the agent's thought channel:
+   * - drop: never include in response (default; content stays message-only)
+   * - reasoning: map to OpenAI reasoning_content
+   * See CURSOR_BRIDGE_THOUGHT_MODE.
+   */
+  thoughtMode: "drop" | "reasoning";
 };
 
 export type AgentCommand = {
@@ -110,6 +117,16 @@ function envBool(
     return true;
   if (value === "0" || value === "false" || value === "no" || value === "off")
     return false;
+  return defaultValue;
+}
+
+function envThoughtMode(
+  env: EnvSource,
+  names: string[],
+  defaultValue: "drop" | "reasoning",
+): "drop" | "reasoning" {
+  const raw = envString(env, names)?.toLowerCase();
+  if (raw === "drop" || raw === "reasoning") return raw;
   return defaultValue;
 }
 
@@ -389,6 +406,7 @@ export function loadEnvConfig(opts: EnvOptions = {}): LoadedEnv {
     winCmdlineMax,
     contextPreamble,
     contextExtra,
+    thoughtMode: envThoughtMode(env, ["CURSOR_BRIDGE_THOUGHT_MODE"], "drop"),
   };
 }
 

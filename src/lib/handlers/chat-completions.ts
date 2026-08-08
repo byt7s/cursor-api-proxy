@@ -44,6 +44,10 @@ import {
   fitPromptToWinCmdline,
   warnPromptTruncated,
 } from "../win-cmdline-limit.js";
+import {
+  thoughtStreamDelta,
+  withReasoningContent,
+} from "../thought-mode.js";
 
 function isRateLimited(stderr: string): boolean {
   return /\b429\b|rate.?limit|too many requests/i.test(stderr);
@@ -210,6 +214,19 @@ export async function handleChatCompletions(
 
     if (config.useAcp && typeof promptForAgent === "string") {
       let accumulated = "";
+      const onThought = (chunk: string) => {
+        const delta = thoughtStreamDelta(chunk, config.thoughtMode);
+        if (!delta) return;
+        res.write(
+          `data: ${JSON.stringify({
+            id,
+            object: "chat.completion.chunk",
+            created,
+            model: displayModel,
+            choices: [{ index: 0, delta, finish_reason: null }],
+          })}\n\n`,
+        );
+      };
       runAgentStream(
         config,
         workspaceDir,
@@ -233,6 +250,7 @@ export async function handleChatCompletions(
         promptForAgent,
         configDir,
         abortController.signal,
+        onThought,
       )
         .then(({ code, stderr: stderrOut }) => {
           const latencyMs = Date.now() - streamStart;
@@ -465,6 +483,11 @@ export async function handleChatCompletions(
   const promptTokens = Math.max(1, Math.round(agentPrompt.length / 4));
   const completionTokens = Math.max(1, Math.round(content.length / 4));
   const totalTokens = promptTokens + completionTokens;
+  const message = withReasoningContent(
+    { role: "assistant", content },
+    out.reasoning,
+    config.thoughtMode,
+  );
 
   logAccountStats(config.verbose, getAccountStats());
   json(
@@ -478,7 +501,7 @@ export async function handleChatCompletions(
       choices: [
         {
           index: 0,
-          message: { role: "assistant", content },
+          message,
           finish_reason: "stop",
         },
       ],

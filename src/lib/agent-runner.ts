@@ -17,6 +17,8 @@ export type AgentRunResult = {
   code: number;
   stdout: string;
   stderr: string;
+  /** Thought channel text (route decides drop vs reasoning_content). */
+  reasoning?: string;
 };
 
 function acpArgsWithModel(acpArgs: string[], model: string): string[] {
@@ -130,6 +132,7 @@ export function runAgentStream(
   stdinPrompt?: string,
   configDir?: string,
   signal?: AbortSignal,
+  onThought?: StreamLineHandler,
 ): Promise<{ code: number; stderr: string }> {
   if (config.useAcp && typeof stdinPrompt === "string") {
     const acpModel = extractModelFromCmdArgs(cmdArgs);
@@ -157,6 +160,7 @@ export function runAgentStream(
         signal,
       },
       onLine,
+      onThought,
     ).then((result) => {
       cacheTokenForAccount(configDir);
       if (tempDir) {
