@@ -78,6 +78,9 @@ function createTestConfig(overrides: Partial<BridgeConfig> = {}): BridgeConfig {
     winCmdlineMax: 30_000,
     contextPreamble: true,
     bridgePackageVersion: "0.0.0-test",
+    maxConcurrentRuns: 16,
+    maxConcurrentRunsPerAccount: 2,
+    admissionWaitMs: 0,
     ...overrides,
   };
 }

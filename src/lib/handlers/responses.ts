@@ -16,6 +16,10 @@ import {
 import type { BridgeConfig } from "../config.js";
 import type { CursorExecutionMode } from "../execution-mode.js";
 import { json, writeSseHeaders } from "../http.js";
+import {
+  AdmissionCapacityError,
+  AGENT_CAPACITY_MESSAGE,
+} from "../admission.js";
 import { runAgentStream, runAgentSync } from "../agent-runner.js";
 import { createStreamParser } from "../cli-stream-parser.js";
 import { resolveModelWithoutCatalog } from "../model-map.js";
@@ -428,7 +432,6 @@ export async function handleResponses(
           logAccountStats(config.verbose, getAccountStats());
           return;
         }
-
         if (outcome.status === "all_disabled") {
           if (!headersWritten) {
             json(res, 403, {
@@ -450,6 +453,7 @@ export async function handleResponses(
           logAccountStats(config.verbose, getAccountStats());
           return;
         }
+
 
         if (outcome.status === "error") {
           ensureHeaders();
@@ -485,6 +489,21 @@ export async function handleResponses(
             },
           });
           res.write("data: [DONE]\n\n");
+        }
+        if (err instanceof AdmissionCapacityError) {
+          const retryAfterSec = Math.max(1, Math.ceil(err.retryAfterMs / 1000));
+          res.write(
+            `data: ${JSON.stringify({
+              error: {
+                message: AGENT_CAPACITY_MESSAGE,
+                code: "agent_capacity",
+                retry_after_ms: err.retryAfterMs,
+              },
+            })}\n\n`,
+          );
+          res.write("data: [DONE]\n\n");
+          res.end();
+          return;
         }
         console.error(
           `[${new Date().toISOString()}] Agent stream error:`,
@@ -541,7 +560,6 @@ export async function handleResponses(
         logAccountStats(config.verbose, getAccountStats());
         return;
       }
-
       if (outcome.status === "all_disabled") {
         if (!headersWritten) {
           json(res, 403, {
@@ -556,6 +574,7 @@ export async function handleResponses(
         logAccountStats(config.verbose, getAccountStats());
         return;
       }
+
 
       if (outcome.status === "error") {
         logAgentError(
@@ -637,7 +656,6 @@ export async function handleResponses(
     });
     return;
   }
-
   if (outcome.status === "all_disabled") {
     logAccountStats(config.verbose, getAccountStats());
     json(res, 403, {
@@ -648,6 +666,7 @@ export async function handleResponses(
     });
     return;
   }
+
 
   if (outcome.status === "error") {
     logAccountStats(config.verbose, getAccountStats());

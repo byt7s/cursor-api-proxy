@@ -289,7 +289,7 @@ npx cursor-api-proxy login account3
 
 **Auto-Discovery:** When you start the proxy server normally (`npx cursor-api-proxy`), it will automatically find all accounts under that `accounts` directory and include them in the rotation pool.
 
-Inspect the pool over HTTP with `GET /accounts`.
+Inspect the pool over HTTP with `GET /accounts` (also shown as a table on the dashboard, and as `GET /api/accounts` for the UI).
 
 ### 2. Manual Config Directories
 
