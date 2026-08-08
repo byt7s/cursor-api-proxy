@@ -5,6 +5,7 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 
 import { loadBridgeConfig } from "./lib/config.js";
+import { runDoctor } from "./lib/doctor.js";
 import { loadEnvConfig } from "./lib/env.js";
 import { startBridgeServer, setupGracefulShutdown } from "./lib/server.js";
 import { parseArgs, printHelp } from "./cli/args.js";
@@ -87,6 +88,19 @@ async function main(): Promise<void> {
     env: mergedEnv,
     mode: args.mode,
   });
+
+  if (args.doctor) {
+    const result = runDoctor(config, mergedEnv);
+    for (const check of result.checks) {
+      const mark = check.ok ? "ok" : "FAIL";
+      console.log(`[${mark}] ${check.name}: ${check.detail}`);
+    }
+    if (!result.ok) {
+      process.exitCode = 1;
+    }
+    return;
+  }
+
   const servers = startBridgeServer({ version: pkg.version, config });
   setupGracefulShutdown(servers);
 }

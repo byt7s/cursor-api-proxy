@@ -21,6 +21,8 @@ export type ParsedArgs = {
   resetHwid: boolean;
   deepClean: boolean;
   dryRun: boolean;
+  /** Preflight accounts/config without starting the HTTP server. */
+  doctor: boolean;
   /** Set via `--mode`; default applied in config when omitted. */
   mode?: CursorExecutionMode;
 };
@@ -44,10 +46,16 @@ export function parseArgs(argv: string[]): ParsedArgs {
   let resetHwid = false;
   let deepClean = false;
   let dryRun = false;
+  let doctor = false;
   let mode: CursorExecutionMode | undefined;
 
   for (let i = 0; i < argv.length; i++) {
     const arg = argv[i];
+
+    if (arg === "doctor") {
+      doctor = true;
+      continue;
+    }
 
     if (arg === "requests") {
       requests = true;
@@ -208,6 +216,7 @@ export function parseArgs(argv: string[]): ParsedArgs {
     resetHwid,
     deepClean,
     dryRun,
+    doctor,
     mode,
   };
 }
@@ -243,6 +252,9 @@ export function printHelp(version: string): void {
   );
   console.log(
     "  requests --watch          Refresh latest requests continuously",
+  );
+  console.log(
+    "  doctor                    Preflight accounts, model, and agent binary",
   );
   console.log("");
   console.log("Options:");
