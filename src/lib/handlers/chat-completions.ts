@@ -4,12 +4,11 @@ import * as http from "node:http";
 import type { BridgeConfig } from "../config.js";
 import type { CursorExecutionMode } from "../execution-mode.js";
 import type { ModelCacheRef } from "./models.js";
-import { getCachedCursorModels } from "./models.js";
 import { buildAgentFixedArgs } from "../agent-cmd-args.js";
 import { runAgentStream, runAgentSync } from "../agent-runner.js";
 import { createStreamParser } from "../cli-stream-parser.js";
 import { json, writeSseHeaders } from "../http.js";
-import { resolveModelForExecution } from "../model-map.js";
+import { resolveModelWithoutCatalog } from "../model-map.js";
 import {
   buildPromptFromMessages,
   normalizeModelId,
@@ -57,15 +56,14 @@ export async function handleChatCompletions(
   pathname: string,
   remoteAddress: string,
 ): Promise<void> {
-  const { config, lastRequestedModelRef, modelCacheRef } = ctx;
+  const { config, lastRequestedModelRef } = ctx;
   const body = JSON.parse(rawBody || "{}") as OpenAiChatCompletionRequest;
   const requested = normalizeModelId(body.model);
   const model = resolveModel(requested, lastRequestedModelRef, config);
-  const models = await getCachedCursorModels(config, modelCacheRef);
-  const decision = resolveModelForExecution({
+  // Skip agent --list-models on the hot path (~2s); GET /v1/models still lists.
+  const decision = resolveModelWithoutCatalog({
     requested: model,
     defaultModel: config.defaultModel,
-    availableCursorIds: models.map((m) => m.id),
   });
   const cursorModel = decision.final;
   rememberResolvedModel(cursorModel, lastRequestedModelRef);

@@ -93,6 +93,22 @@ function matchAvailableModel(
   return byLower.get(candidate.toLowerCase());
 }
 
+/**
+ * Resolve a chat/completions model without calling `agent --list-models`.
+ * Mapping (Anthropic → Cursor) still applies; unknown ids are passed through
+ * and the Cursor CLI rejects them if invalid.
+ */
+export function resolveModelWithoutCatalog(args: {
+  requested: string | undefined;
+  defaultModel: string;
+}): ModelResolutionDecision {
+  return resolveModelForExecution({
+    requested: args.requested,
+    defaultModel: args.defaultModel,
+    availableCursorIds: [],
+  });
+}
+
 export function resolveModelForExecution(args: {
   requested: string | undefined;
   defaultModel: string;
