@@ -7,6 +7,7 @@ import {
 import {
   getAccountStats,
   initAccountPool,
+  reportAccountDisabled,
   reportRateLimit,
 } from "./account-pool.js";
 
@@ -125,6 +126,41 @@ describe("runSyncWithAccountFailover", () => {
     expect(outcome.status).toBe("error");
     expect(runOnce).toHaveBeenCalledTimes(1);
   });
+
+  it("returns all_disabled (not all_rate_limited) when every account is quarantined", async () => {
+    initAccountPool(["/a", "/b"]);
+    reportAccountDisabled("/a", "plan_upgrade");
+    reportAccountDisabled("/b", "plan_upgrade");
+
+    const runOnce = vi.fn(async () => ({
+      code: 0,
+      stdout: "should-not-run",
+      stderr: "",
+    }));
+
+    const outcome = await runSyncWithAccountFailover(runOnce);
+    expect(outcome.status).toBe("all_disabled");
+    expect(outcome.status).not.toBe("all_rate_limited");
+    expect(runOnce).not.toHaveBeenCalled();
+    if (outcome.status === "all_disabled") {
+      expect(outcome.latencyMs).toBe(0);
+      expect(outcome.result).toBeUndefined();
+    }
+  });
+
+  it("returns all_disabled after every account hits plan-upgrade quarantine", async () => {
+    initAccountPool(["/a", "/b"]);
+    const runOnce = vi.fn(async () => ({
+      code: 0,
+      stdout: "Upgrade your plan to continue",
+      stderr: "",
+    }));
+
+    const outcome = await runSyncWithAccountFailover(runOnce);
+    expect(outcome.status).toBe("all_disabled");
+    expect(runOnce).toHaveBeenCalledTimes(2);
+    expect(getAccountStats().every((s) => s.isDisabled)).toBe(true);
+  });
 });
 
 describe("runStreamWithAccountFailover", () => {
@@ -171,6 +207,25 @@ describe("runStreamWithAccountFailover", () => {
     expect(outcome.status).toBe("all_rate_limited");
     expect(commits).toEqual([]);
     if (outcome.status === "all_rate_limited") {
+      expect(outcome.committed).toBe(false);
+    }
+  });
+
+  it("returns all_disabled without committing when every account is disabled", async () => {
+    initAccountPool(["/a", "/b"]);
+    reportAccountDisabled("/a", "plan_upgrade");
+    reportAccountDisabled("/b", "plan_upgrade");
+    const commits: string[] = [];
+
+    const outcome = await runStreamWithAccountFailover({
+      onCommit: () => commits.push("commit"),
+      onChunk: () => {},
+      runOnce: async () => ({ code: 0, stderr: "" }),
+    });
+
+    expect(outcome.status).toBe("all_disabled");
+    expect(commits).toEqual([]);
+    if (outcome.status === "all_disabled") {
       expect(outcome.committed).toBe(false);
     }
   });
