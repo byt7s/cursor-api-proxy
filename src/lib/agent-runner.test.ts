@@ -52,6 +52,7 @@ function config(overrides: Partial<BridgeConfig> = {}): BridgeConfig {
     maxConcurrentRuns: 16,
     maxConcurrentRunsPerAccount: 2,
     admissionWaitMs: 0,
+    latencyWaterfall: true,
     ...overrides,
   };
 }

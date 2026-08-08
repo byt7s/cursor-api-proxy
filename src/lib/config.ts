@@ -79,6 +79,8 @@ export type BridgeConfig = {
   maxConcurrentRunsPerAccount: number;
   /** How long to wait for an admission permit before failing. */
   admissionWaitMs: number;
+  /** Log compact per-request latency spans (see CURSOR_BRIDGE_LATENCY_WATERFALL). */
+  latencyWaterfall: boolean;
 };
 
 export function loadBridgeConfig(opts: EnvOptions = {}): BridgeConfig {
@@ -139,5 +141,6 @@ export function loadBridgeConfig(opts: EnvOptions = {}): BridgeConfig {
     maxConcurrentRuns: env.maxConcurrentRuns,
     maxConcurrentRunsPerAccount: env.maxConcurrentRunsPerAccount,
     admissionWaitMs: env.admissionWaitMs,
+    latencyWaterfall: env.latencyWaterfall,
   };
 }

@@ -68,6 +68,11 @@ export type LoadedEnv = {
   maxConcurrentRunsPerAccount: number;
   /** How long to wait for an admission permit before 503. */
   admissionWaitMs: number;
+  /**
+   * When true, log a compact per-request latency waterfall line at request end.
+   * Default true (cheap one-line summary). Set CURSOR_BRIDGE_LATENCY_WATERFALL=false to disable.
+   */
+  latencyWaterfall: boolean;
 };
 
 export type AgentCommand = {
@@ -417,6 +422,7 @@ export function loadEnvConfig(opts: EnvOptions = {}): LoadedEnv {
       0,
       envNumber(env, ["CURSOR_BRIDGE_ADMISSION_WAIT_MS"], 5000),
     ),
+    latencyWaterfall: envBool(env, ["CURSOR_BRIDGE_LATENCY_WATERFALL"], true),
   };
 }
 
