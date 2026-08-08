@@ -51,6 +51,7 @@
     "vitest": "^4.0.18"
   },
   "dependencies": {
+    "@cursor/sdk": "^1.0.24",
     "chrome-launcher": "^1.2.1"
   }
 }

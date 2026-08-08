@@ -6,8 +6,10 @@ import {
 } from "./account-api-key.js";
 import { runAcpStream, runAcpSync } from "./acp-client.js";
 import type { BridgeConfig } from "./config.js";
+import { resolveAccountEngine } from "./execution-engine.js";
 import type { CursorExecutionMode } from "./execution-mode.js";
 import { run, runStreaming } from "./process.js";
+import { runSdkAgent } from "./sdk-executor.js";
 import { getChatOnlyEnvOverrides } from "./workspace.js";
 import { readKeychainToken, writeCachedToken } from "./token-cache.js";
 
@@ -32,6 +34,10 @@ export type AgentRunResult = {
   code: number;
   stdout: string;
   stderr: string;
+  /** Thought channel text (when thoughtMode=reasoning). */
+  reasoning?: string;
+  /** Stable failure token for quarantine / failover classifiers. */
+  failureText?: string;
 };
 
 function acpArgsWithModel(acpArgs: string[], model: string): string[] {
@@ -67,6 +73,68 @@ function extractModeFromCmdArgs(cmdArgs: string[]): CursorExecutionMode {
   return "ask";
 }
 
+function cleanupTemp(tempDir?: string): void {
+  if (!tempDir) return;
+  try {
+    fs.rmSync(tempDir, { recursive: true, force: true });
+  } catch {
+    /* ignore */
+  }
+}
+
+function resolveSdkApiKey(
+  config: BridgeConfig,
+  configDir?: string,
+): string | undefined {
+  return readAccountApiKey(configDir) ?? config.cursorApiKey;
+}
+
+/**
+ * Run via `@cursor/sdk` when the account (or default) engine is `sdk`.
+ * Returns null when ACP/CLI should handle the request instead.
+ */
+function trySdkRun(
+  config: BridgeConfig,
+  workspaceDir: string,
+  cmdArgs: string[],
+  stdinPrompt: string | undefined,
+  configDir: string | undefined,
+  signal: AbortSignal | undefined,
+  onChunk?: (text: string) => void,
+  onThought?: (text: string) => void,
+): Promise<AgentRunResult> | null {
+  if (resolveAccountEngine(configDir, config.defaultEngine) !== "sdk") {
+    return null;
+  }
+  const apiKey = resolveSdkApiKey(config, configDir);
+  if (!apiKey) {
+    return Promise.resolve({
+      code: 1,
+      stdout: "",
+      stderr: "sdk_engine_requires_api_key",
+      failureText: "sdk_engine_requires_api_key",
+    });
+  }
+  if (typeof stdinPrompt !== "string") {
+    return Promise.resolve({
+      code: 1,
+      stdout: "",
+      stderr: "sdk_engine_requires_prompt",
+      failureText: "sdk_engine_requires_prompt",
+    });
+  }
+  return runSdkAgent({
+    prompt: stdinPrompt,
+    cursorModel: extractModelFromCmdArgs(cmdArgs) ?? config.defaultModel,
+    cwd: workspaceDir,
+    apiKey,
+    timeoutMs: config.timeoutMs,
+    signal,
+    onChunk,
+    onThought,
+  });
+}
+
 export function runAgentSync(
   config: BridgeConfig,
   workspaceDir: string,
@@ -77,6 +145,18 @@ export function runAgentSync(
   configDir?: string,
   signal?: AbortSignal,
 ): Promise<AgentRunResult> {
+  const sdkRun = trySdkRun(
+    config,
+    workspaceDir,
+    cmdArgs,
+    stdinPrompt,
+    configDir,
+    signal,
+  );
+  if (sdkRun) {
+    return sdkRun.finally(() => cleanupTemp(tempDir));
+  }
+
   if (config.useAcp && typeof stdinPrompt === "string") {
     const acpModel = extractModelFromCmdArgs(cmdArgs);
     const acpMode = extractModeFromCmdArgs(cmdArgs);
@@ -99,13 +179,7 @@ export function runAgentSync(
       signal,
     }).then((out) => {
       cacheTokenForAccount(configDir);
-      if (tempDir) {
-        try {
-          fs.rmSync(tempDir, { recursive: true, force: true });
-        } catch {
-          /* ignore */
-        }
-      }
+      cleanupTemp(tempDir);
       return out;
     });
   }
@@ -122,13 +196,7 @@ export function runAgentSync(
     signal,
   }).then((out) => {
     cacheTokenForAccount(configDir);
-    if (tempDir) {
-      try {
-        fs.rmSync(tempDir, { recursive: true, force: true });
-      } catch {
-        /* ignore */
-      }
-    }
+    cleanupTemp(tempDir);
     return out;
   });
 }
@@ -145,7 +213,24 @@ export function runAgentStream(
   stdinPrompt?: string,
   configDir?: string,
   signal?: AbortSignal,
+  onThought?: StreamLineHandler,
 ): Promise<{ code: number; stderr: string }> {
+  const sdkRun = trySdkRun(
+    config,
+    workspaceDir,
+    cmdArgs,
+    stdinPrompt,
+    configDir,
+    signal,
+    onLine,
+    onThought,
+  );
+  if (sdkRun) {
+    return sdkRun
+      .then((result) => ({ code: result.code, stderr: result.stderr }))
+      .finally(() => cleanupTemp(tempDir));
+  }
+
   if (config.useAcp && typeof stdinPrompt === "string") {
     const acpModel = extractModelFromCmdArgs(cmdArgs);
     const acpMode = extractModeFromCmdArgs(cmdArgs);
@@ -174,13 +259,7 @@ export function runAgentStream(
       onLine,
     ).then((result) => {
       cacheTokenForAccount(configDir);
-      if (tempDir) {
-        try {
-          fs.rmSync(tempDir, { recursive: true, force: true });
-        } catch {
-          /* ignore */
-        }
-      }
+      cleanupTemp(tempDir);
       return result;
     });
   }
@@ -198,13 +277,7 @@ export function runAgentStream(
     signal,
   }).then((result) => {
     cacheTokenForAccount(configDir);
-    if (tempDir) {
-      try {
-        fs.rmSync(tempDir, { recursive: true, force: true });
-      } catch {
-        /* ignore */
-      }
-    }
+    cleanupTemp(tempDir);
     return result;
   });
 }

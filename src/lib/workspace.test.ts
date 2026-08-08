@@ -27,6 +27,7 @@ function baseConfig(overrides: Partial<BridgeConfig> = {}): BridgeConfig {
     maxMode: false,
     promptViaStdin: false,
     useAcp: false,
+    defaultEngine: "acp",
     acpSkipAuthenticate: true,
     acpRawDebug: false,
     configDirs: [],
