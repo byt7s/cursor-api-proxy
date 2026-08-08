@@ -18,6 +18,12 @@ import {
 } from "./audit-log.js";
 import type { BridgeConfig } from "./config.js";
 import {
+  CONFIG_FILE_KEYS,
+  ConfigFileError,
+  REFUSED_CONFIG_KEYS,
+  writeConfigFile,
+} from "./config-file.js";
+import {
   authorizeSensitiveApi,
   dashboardIsKeyProtected,
   type AuthorizeResult,
@@ -235,6 +241,31 @@ function sanitizedBridgeConfig(
   };
 }
 
+/**
+ * The effective value of every documented config-file key, read straight off
+ * the running `BridgeConfig`. Every spec key mirrors a `BridgeConfig` field of
+ * the same name, which is what keeps the form honest about what is in force.
+ */
+function effectiveConfigValues(config: BridgeConfig): Record<string, unknown> {
+  const record = config as unknown as Record<string, unknown>;
+  const out: Record<string, unknown> = {};
+  for (const spec of CONFIG_FILE_KEYS) out[spec.key] = record[spec.key];
+  return out;
+}
+
+function configFileView(config: BridgeConfig): Record<string, unknown> {
+  return {
+    path: config.configFile.path,
+    exists: config.configFile.exists,
+    values: config.configFile.values,
+    warnings: config.configFile.warnings,
+    sources: config.configFile.sources,
+    effective: effectiveConfigValues(config),
+    keys: CONFIG_FILE_KEYS,
+    refusedKeys: REFUSED_CONFIG_KEYS,
+  };
+}
+
 function runControl(
   action: string,
   config: BridgeConfig,
@@ -419,6 +450,7 @@ export function handleAdminDashboard(
   const sensitiveGet =
     req.method === "GET" &&
     (pathname === "/api/config" ||
+      pathname === "/api/config/file" ||
       pathname === "/api/accounts" ||
       pathname === "/api/doctor" ||
       pathname === "/api/audit" ||
@@ -468,6 +500,44 @@ export function handleAdminDashboard(
 
   if (req.method === "GET" && pathname === "/api/config") {
     return json(res, 200, sanitizedBridgeConfig(config, auth));
+  }
+  if (req.method === "GET" && pathname === "/api/config/file") {
+    return json(res, 200, configFileView(config));
+  }
+  if (req.method === "PUT" && pathname === "/api/config/file") {
+    return readJsonBody(req, config.maxBodyBytes, (err, body) => {
+      if (err) return jsonBodyError(res, err);
+      const values = body.values ?? body;
+      try {
+        const result = writeConfigFile(
+          config.configFile.path,
+          values,
+          config.configFile.values,
+          { effective: effectiveConfigValues(config), sources: config.configFile.sources },
+        );
+        // Keep the in-memory snapshot honest so a re-read of `/api/config/file`
+        // reflects the write without waiting for the restart.
+        config.configFile.values = result.values;
+        config.configFile.exists = true;
+        return json(res, 200, {
+          ...configFileView(config),
+          ok: true,
+          path: result.path,
+          written: result.written,
+          restartRequired: result.restartRequired,
+          noEffect: result.noEffect,
+          warnings: result.warnings,
+        });
+      } catch (writeErr) {
+        const message =
+          writeErr instanceof Error ? writeErr.message : String(writeErr);
+        const status = writeErr instanceof ConfigFileError ? 400 : 500;
+        return json(res, status, {
+          error: message,
+          key: writeErr instanceof ConfigFileError ? writeErr.key : undefined,
+        });
+      }
+    });
   }
   if (req.method === "GET" && pathname === "/api/audit") {
     const limit = Math.min(500, Math.max(1, Number(q.limit) || 50));

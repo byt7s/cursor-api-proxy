@@ -1,3 +1,4 @@
+import { EMPTY_CONFIG_FILE_STATE } from "../config-file.js";
 import * as http from "node:http";
 import * as os from "node:os";
 import * as path from "node:path";
@@ -71,6 +72,7 @@ function createTestConfig(overrides: Partial<BridgeConfig> = {}): BridgeConfig {
     auditLogMaxBytes: 1_000_000,
     maxBodyBytes: 8 * 1024 * 1024,
     corsOrigins: [],
+    configFile: EMPTY_CONFIG_FILE_STATE,
     requestsLogEnabled: false,
     requestsLogMaxBytes: 1_000_000,
     metricsEnabled: true,

@@ -1,3 +1,4 @@
+import { EMPTY_CONFIG_FILE_STATE } from "./config-file.js";
 import { describe, expect, it } from "vitest";
 
 import { rememberResolvedModel, resolveModel } from "./resolve-model.js";
@@ -46,6 +47,7 @@ function config(overrides: Partial<BridgeConfig> = {}): BridgeConfig {
     auditLogMaxBytes: 1_000_000,
     maxBodyBytes: 8 * 1024 * 1024,
     corsOrigins: [],
+    configFile: EMPTY_CONFIG_FILE_STATE,
     requestsLogEnabled: false,
     requestsLogMaxBytes: 1_000_000,
     metricsEnabled: true,

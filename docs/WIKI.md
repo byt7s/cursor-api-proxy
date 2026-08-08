@@ -136,7 +136,7 @@ The plist label is **`com.cursor-api-proxy`**. Use **`cursor-api-proxy disable`*
 
 - `GET /` and `GET /wiki` both serve `public/dashboard/index.html`; `GET /static/*` serves `public/*`, so bundles resolve at `/static/dashboard/assets/…` (always open)
 - `GET /api/status`, `GET /api/log`, `GET /api/stats`, `GET /api/wiki`
-- Sensitive reads: `GET /api/config`, `GET /api/accounts`, `GET /api/doctor`, `GET /api/requests?limit=`, `GET /api/audit?limit=`
+- Sensitive reads: `GET /api/config`, `GET /api/config/file`, `GET /api/accounts`, `GET /api/doctor`, `GET /api/requests?limit=`, `GET /api/audit?limit=`
 - **Dashboard auth gate** (same for sensitive reads, mutations and `/metrics`), in precedence order:
   1. an `admin`-scoped key from `CURSOR_BRIDGE_API_KEYS` — always accepted
   2. `CURSOR_BRIDGE_DASHBOARD_KEY` when set — then nothing else opens the dashboard
@@ -152,6 +152,8 @@ The plist label is **`com.cursor-api-proxy`**. Use **`cursor-api-proxy disable`*
   - `PUT /api/accounts/:name/key` `{ "apiKey" }` — attach key to existing account
   - `DELETE /api/accounts/:name` — remove account directory
   - `POST /api/reset-hwid` `{ "deepClean"?: boolean }` — destructive Cursor HWID reset
+  - `PUT /api/config/file` `{ "values": { … } }` — replace the config file contents
+- `GET /api/config/file` returns `{ path, exists, values, warnings, sources, effective, keys, refusedKeys }`. `sources` maps every documented key to `cli` / `env` / `file` / `default`; `keys` is the schema the **Config** page renders (type, enum values, group, whether the dashboard may write it). `PUT` validates first, refuses credential keys and non-editable keys with **400** naming the key, then writes to a sibling temp file and renames it into place. The response adds `written`, `restartRequired` (values that change once the proxy restarts) and `noEffect` (written, but a flag or variable still wins).
 - Interactive browser login is **not** exposed over HTTP; use CLI `cursor-api-proxy login`.
 - Responses never include raw API keys. Auth badges: `API key`, `CLI`, or `CLI + key` when a session account also has `.cursor-api-key`.
 - `GET /api/config` exposes real admission caps (`maxConcurrentRuns*`, `sdkMaxConcurrentRuns*`, `admissionWaitMs`) without secrets, plus the inbound key inventory as `{ label, scope, fingerprint }` and a `caller` field naming the credential this request used.
@@ -173,6 +175,7 @@ The plist label is **`com.cursor-api-proxy`**. Use **`cursor-api-proxy disable`*
 | `public/dashboard/` | Built dashboard assets — produced by `npm run build:web`, **committed** so npm/git installs need no frontend build |
 | `docs/WIKI.md` | Wiki source |
 | `scripts/cursor-api-proxy` | Launcher script (symlink target) |
+| `~/.cursor-api-proxy/config.json` | Optional JSON config file (`CURSOR_BRIDGE_CONFIG_FILE`). Loses to CLI flags and environment variables, wins over defaults; credentials are refused. Editable from the dashboard **Config** page |
 | `~/.cursor-api-proxy/sessions.log` | Default request log (one line per finished response) |
 | `~/.cursor-api-proxy/requests.jsonl` | Structured request log (one JSON record per response; rotates to `.1`, see `CURSOR_BRIDGE_REQUESTS_LOG*`) |
 | `~/.cursor-api-proxy/audit.jsonl` | Audit trail of dashboard mutations (one JSON record per attempt; rotates to `.1`, see `CURSOR_BRIDGE_AUDIT_LOG*`) |

@@ -183,6 +183,47 @@ export type AuditPayload = {
   records: AuditRecord[];
 };
 
+/** Where a config key's effective value came from, most specific first. */
+export type ConfigValueSource = "cli" | "env" | "file" | "default";
+
+export type ConfigFileType =
+  | "string"
+  | "number"
+  | "boolean"
+  | "string[]"
+  | "enum";
+
+export type ConfigFileKeySpec = {
+  key: string;
+  env: string;
+  type: ConfigFileType;
+  values?: string[];
+  group: string;
+  label: string;
+  editable: boolean;
+};
+
+export type ConfigFileValue = string | number | boolean | string[];
+
+export type ConfigFilePayload = {
+  path: string;
+  exists: boolean;
+  values: Record<string, ConfigFileValue>;
+  warnings: string[];
+  sources: Record<string, ConfigValueSource>;
+  effective: Record<string, unknown>;
+  keys: ConfigFileKeySpec[];
+  refusedKeys: string[];
+};
+
+export type ConfigFileSaveResult = ConfigFilePayload & {
+  ok: true;
+  written: string[];
+  restartRequired: string[];
+  /** Written, but a CLI flag or env var still wins after the restart. */
+  noEffect: string[];
+};
+
 export type LogPayload = { path: string; lines: string[] };
 export type RequestsPayload = {
   path: string;

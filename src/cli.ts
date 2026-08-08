@@ -80,17 +80,15 @@ async function main(): Promise<void> {
     return;
   }
 
-  const mergedEnv = args.verbose
-    ? { ...process.env, CURSOR_BRIDGE_VERBOSE: "true" }
-    : process.env;
   const config = loadBridgeConfig({
     tailscale: args.tailscale,
-    env: mergedEnv,
+    env: process.env,
     mode: args.mode,
+    verbose: args.verbose,
   });
 
   if (args.doctor) {
-    const result = runDoctor(config, mergedEnv);
+    const result = runDoctor(config, process.env);
     for (const check of result.checks) {
       const mark = check.ok ? "ok" : "FAIL";
       console.log(`[${mark}] ${check.name}: ${check.detail}`);

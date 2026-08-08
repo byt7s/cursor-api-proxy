@@ -3,6 +3,9 @@ import type {
   AccountsReport,
   AuditPayload,
   ClearLogResult,
+  ConfigFilePayload,
+  ConfigFileSaveResult,
+  ConfigFileValue,
   ControlAction,
   ControlResult,
   DoctorResult,
@@ -145,6 +148,12 @@ export async function apiRequest<T>(
 export const api = {
   status: () => apiRequest<ProxyStatus>("/api/status"),
   config: () => apiRequest<ProxyConfig>("/api/config"),
+  configFile: () => apiRequest<ConfigFilePayload>("/api/config/file"),
+  saveConfigFile: (values: Record<string, ConfigFileValue>) =>
+    apiRequest<ConfigFileSaveResult>("/api/config/file", {
+      method: "PUT",
+      body: { values },
+    }),
   stats: (hours = 24) => apiRequest<SessionStats>(`/api/stats?hours=${hours}`),
   log: (lines = 200) => apiRequest<LogPayload>(`/api/log?lines=${lines}`),
   clearLog: () =>
