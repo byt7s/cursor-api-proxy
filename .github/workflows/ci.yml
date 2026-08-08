@@ -1,0 +1,96 @@
+name: CI
+
+on:
+  push:
+  pull_request:
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+env:
+  # The repo tracks package-lock.json only (no pnpm-lock.yaml), so pnpm resolves
+  # from it instead of a frozen pnpm lockfile. Caching the store keeps that cheap.
+  PNPM_VERSION: 10
+
+jobs:
+  check:
+    name: typecheck + test (node ${{ matrix.node }})
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        node: ["18", "20", "22"]
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: pnpm/action-setup@v4
+        with:
+          version: ${{ env.PNPM_VERSION }}
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ matrix.node }}
+
+      - name: Resolve pnpm store path
+        run: echo "PNPM_STORE_PATH=$(pnpm store path --silent)" >> "$GITHUB_ENV"
+
+      - uses: actions/cache@v4
+        with:
+          path: ${{ env.PNPM_STORE_PATH }}
+          key: pnpm-store-${{ runner.os }}-node${{ matrix.node }}-${{ hashFiles('package-lock.json') }}
+          restore-keys: |
+            pnpm-store-${{ runner.os }}-node${{ matrix.node }}-
+            pnpm-store-${{ runner.os }}-
+
+      - run: pnpm install --no-frozen-lockfile
+
+      - run: pnpm typecheck
+
+      # `engines` still allows Node 18 for the proxy runtime, but vitest 4 needs
+      # Node >= 20, so 18 is a compile-only guard for the published output.
+      - name: test
+        if: matrix.node != '18'
+        run: pnpm test
+
+  dashboard-assets:
+    name: dashboard assets match source
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: pnpm/action-setup@v4
+        with:
+          version: ${{ env.PNPM_VERSION }}
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+
+      - name: Resolve pnpm store path
+        run: echo "PNPM_STORE_PATH=$(pnpm store path --silent)" >> "$GITHUB_ENV"
+
+      - uses: actions/cache@v4
+        with:
+          path: ${{ env.PNPM_STORE_PATH }}
+          key: pnpm-store-${{ runner.os }}-node22-${{ hashFiles('package-lock.json') }}
+          restore-keys: |
+            pnpm-store-${{ runner.os }}-node22-
+            pnpm-store-${{ runner.os }}-
+
+      - run: pnpm install --no-frozen-lockfile
+
+      - run: pnpm build:web
+
+      - name: Verify public/dashboard is the committed build
+        run: |
+          if [ -n "$(git status --porcelain -- public/dashboard)" ]; then
+            echo "::error::public/dashboard is out of date with web/. Run 'pnpm build:web' and commit the result."
+            git status --short -- public/dashboard
+            git diff -- public/dashboard
+            exit 1
+          fi
+          echo "public/dashboard matches the build from web/."

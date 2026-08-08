@@ -377,6 +377,22 @@ curl -s http://127.0.0.1:8765/accounts
 curl -s http://127.0.0.1:8765/v1/models
 ```
 
+## Contributing / CI
+
+`.github/workflows/ci.yml` runs on every push and pull request:
+
+- **typecheck + test** on Node **18**, **20**, and **22** (`pnpm typecheck`, then `pnpm test`). Node 18 runs typecheck only — the proxy still supports it (`engines: >=18`), but `vitest` 4 requires Node >= 20.
+- **dashboard assets match source** — the React dashboard in `web/` is built into `public/dashboard/` and those built files are **committed**. CI runs `pnpm build:web` and fails if `git status --porcelain public/dashboard` is not empty.
+
+So when you change anything under `web/`, rebuild and commit the output in the same change:
+
+```bash
+pnpm build:web
+git add public/dashboard
+```
+
+Install uses `pnpm install --no-frozen-lockfile` because the repo tracks `package-lock.json` only; the pnpm store is cached per Node version keyed on that lockfile.
+
 ## License
 
 MIT
