@@ -7,8 +7,11 @@ import {
 import {
   getAccountStats,
   initAccountPool,
+  reportAccountDisabled,
   reportRateLimit,
 } from "./account-pool.js";
+import { AdmissionCapacityError } from "./admission.js";
+import { AcpWorkerBusyError } from "./acp-pool.js";
 
 describe("isRateLimited", () => {
   it("detects common rate-limit stderr patterns", () => {
@@ -124,6 +127,48 @@ describe("runSyncWithAccountFailover", () => {
     const outcome = await runSyncWithAccountFailover(runOnce);
     expect(outcome.status).toBe("error");
     expect(runOnce).toHaveBeenCalledTimes(1);
+  });
+
+  it("retries next account on AdmissionCapacityError", async () => {
+    initAccountPool(["/a", "/b"]);
+    const runOnce = vi.fn(async (configDir: string | undefined) => {
+      if (configDir === "/a") throw new AdmissionCapacityError(1000);
+      return { code: 0, stdout: "from-b", stderr: "" };
+    });
+
+    const outcome = await runSyncWithAccountFailover(runOnce);
+    expect(outcome.status).toBe("ok");
+    if (outcome.status !== "ok") return;
+    expect(outcome.configDir).toBe("/b");
+    expect(runOnce).toHaveBeenCalledTimes(2);
+  });
+
+  it("retries next account on AcpWorkerBusyError", async () => {
+    initAccountPool(["/a", "/b"]);
+    const runOnce = vi.fn(async (configDir: string | undefined) => {
+      if (configDir === "/a") throw new AcpWorkerBusyError("/a");
+      return { code: 0, stdout: "from-b", stderr: "" };
+    });
+
+    const outcome = await runSyncWithAccountFailover(runOnce);
+    expect(outcome.status).toBe("ok");
+    if (outcome.status !== "ok") return;
+    expect(outcome.configDir).toBe("/b");
+    expect(runOnce).toHaveBeenCalledTimes(2);
+  });
+
+  it("returns all_disabled when every account is quarantined", async () => {
+    initAccountPool(["/a", "/b"]);
+    reportAccountDisabled("/a", "plan_upgrade");
+    reportAccountDisabled("/b", "plan_upgrade");
+    const runOnce = vi.fn(async () => ({
+      code: 0,
+      stdout: "nope",
+      stderr: "",
+    }));
+    const outcome = await runSyncWithAccountFailover(runOnce);
+    expect(outcome.status).toBe("all_disabled");
+    expect(runOnce).not.toHaveBeenCalled();
   });
 });
 
