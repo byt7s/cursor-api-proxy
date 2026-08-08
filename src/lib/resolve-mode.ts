@@ -4,10 +4,16 @@ import {
   type CursorExecutionMode,
 } from "./execution-mode.js";
 
+export type ResolveRequestModeOptions = {
+  /** When tools/functions are present and no explicit mode was set, prefer agent. */
+  hasTools?: boolean;
+};
+
 export function resolveRequestMode(
   config: BridgeConfig,
   headerMode: string | string[] | undefined,
   bodyMode: unknown,
+  options: ResolveRequestModeOptions = {},
 ): CursorExecutionMode {
   if (bodyMode !== undefined && bodyMode !== null) {
     if (typeof bodyMode !== "string") {
@@ -20,6 +26,9 @@ export function resolveRequestMode(
   const h = Array.isArray(headerMode) ? headerMode[0] : headerMode;
   if (typeof h === "string" && h.trim()) {
     return parseExecutionModeFromRequest(h, "X-Cursor-Mode header");
+  }
+  if (options.hasTools) {
+    return "agent";
   }
   return config.mode;
 }

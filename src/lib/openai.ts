@@ -41,6 +41,31 @@ export function normalizeModelId(raw: string | undefined): string | undefined {
   return parts[parts.length - 1] || undefined;
 }
 
+const USER_REQUEST_RE = /<userRequest>\s*([\s\S]*?)\s*<\/userRequest>/i;
+const COPILOT_TAG_RE =
+  /<(?:context|editorContext|reminderInstructions|userRequest)>[\s\S]*?<\/(?:context|editorContext|reminderInstructions|userRequest)>/gi;
+
+/**
+ * Extract the actual user request from a Copilot-wrapped message.
+ * If `<userRequest>` is present, returns just its content; otherwise the full text.
+ */
+export function extractCopilotUserRequest(text: string): string {
+  const match = text.match(USER_REQUEST_RE);
+  if (match) return match[1].trim();
+  return text;
+}
+
+/**
+ * Strip Copilot XML wrapper tags when `<userRequest>` is present.
+ * Keeps residual text outside the tags (e.g. free-form notes).
+ */
+export function stripCopilotBoilerplate(text: string): string {
+  if (!USER_REQUEST_RE.test(text)) return text;
+  // Reset lastIndex from the previous .test() on the global-ish pattern via new match.
+  const stripped = text.replace(COPILOT_TAG_RE, "").trim();
+  return stripped || extractCopilotUserRequest(text);
+}
+
 function imageUrlToText(imageUrl: any): string {
   if (!imageUrl) return "[Image]";
   const url: string =
@@ -202,8 +227,12 @@ export function buildPromptFromMessages(messages: any[]): string {
 
   for (const m of messages || []) {
     const role = m?.role;
-    const text = messageContentToText(m?.content);
+    let text = messageContentToText(m?.content);
     if (!text) continue;
+    if (role === "user" && USER_REQUEST_RE.test(text)) {
+      text = extractCopilotUserRequest(text);
+      if (!text) continue;
+    }
 
     if (role === "system" || role === "developer") {
       systemParts.push(text);

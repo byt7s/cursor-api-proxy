@@ -55,6 +55,22 @@ describe("resolveRequestMode", () => {
     ).toBe("agent");
   });
 
+  it("uses agent when tools are present and mode is unset", () => {
+    expect(
+      resolveRequestMode(base({ mode: "ask" }), undefined, undefined, {
+        hasTools: true,
+      }),
+    ).toBe("agent");
+  });
+
+  it("does not override explicit mode when tools are present", () => {
+    expect(
+      resolveRequestMode(base({ mode: "ask" }), undefined, "plan", {
+        hasTools: true,
+      }),
+    ).toBe("plan");
+  });
+
   it("throws on invalid body.mode", () => {
     expect(() =>
       resolveRequestMode(base(), undefined, "nope"),

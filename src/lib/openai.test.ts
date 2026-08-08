@@ -2,7 +2,9 @@ import { describe, it, expect } from "vitest";
 import {
   normalizeModelId,
   buildPromptFromMessages,
+  extractCopilotUserRequest,
   responsesInputToMessages,
+  stripCopilotBoilerplate,
   toolsToSystemText,
   type OpenAiChatCompletionRequest,
 } from "./openai.js";
@@ -72,6 +74,23 @@ describe("buildPromptFromMessages", () => {
     ];
     const prompt = buildPromptFromMessages(messages);
     expect(prompt).toContain("System:\nDev instructions");
+  });
+
+  it("strips Copilot wrapper tags from user messages", () => {
+    const wrapped =
+      `<context>\nThe current date is March 13, 2026.\n</context>\n` +
+      `<editorContext>\nThe user's current file is /tmp/x.ts\n</editorContext>\n` +
+      `<reminderInstructions>\nPrefer edit_file.\n</reminderInstructions>\n` +
+      `<userRequest>\nFix the bug\n</userRequest>`;
+    expect(extractCopilotUserRequest(wrapped)).toBe("Fix the bug");
+    expect(stripCopilotBoilerplate(wrapped)).toBe("Fix the bug");
+    const prompt = buildPromptFromMessages([
+      { role: "system", content: "Copilot system noise" },
+      { role: "user", content: wrapped },
+    ]);
+    expect(prompt).toContain("User: Fix the bug");
+    expect(prompt).not.toContain("reminderInstructions");
+    expect(prompt).not.toContain("editorContext");
   });
 
   it("handles tool/function messages", () => {
