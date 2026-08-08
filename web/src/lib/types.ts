@@ -41,6 +41,10 @@ export type ProxyConfig = {
   workspace: string;
   timeoutMs: number;
   sessionsLogPath: string;
+  requestsLogPath: string;
+  requestsLogEnabled: boolean;
+  requestsLogMaxBytes: number;
+  metricsEnabled: boolean;
   chatOnlyWorkspace: boolean;
   verbose: boolean;
   maxMode: boolean;
@@ -103,8 +107,44 @@ export type SessionStats = {
   recent: SessionRequest[];
 };
 
+export type LatencySpanName =
+  | "gateway_queue"
+  | "account_select"
+  | "spawn"
+  | "session_ready"
+  | "model_first_byte"
+  | "model_complete"
+  | "shape_response"
+  | "total";
+
+/**
+ * Structured record from the JSONL request log (`src/lib/request-record.ts`).
+ * Everything past the four text-log fields is optional: the same shape is used
+ * when `/api/requests` falls back to parsing `sessions.log`.
+ */
+export type RequestRecord = SessionRequest & {
+  remoteAddress?: string;
+  durationMs?: number;
+  model?: string;
+  engine?: "acp" | "sdk";
+  account?: string;
+  streaming?: boolean;
+  errorCode?: string;
+  failoverCount?: number;
+  spans?: Partial<Record<LatencySpanName, number>>;
+  hasConversation?: boolean;
+  conversationHash?: string;
+  promptChars?: number;
+  completionChars?: number;
+};
+
 export type LogPayload = { path: string; lines: string[] };
-export type RequestsPayload = { path: string; requests: SessionRequest[] };
+export type RequestsPayload = {
+  path: string;
+  /** `jsonl` when served from the structured log, `text` from `sessions.log`. */
+  source?: "jsonl" | "text";
+  requests: RequestRecord[];
+};
 export type ClearLogResult = { archivePath: string };
 export type ControlAction =
   | "start"

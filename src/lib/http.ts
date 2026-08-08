@@ -17,6 +17,18 @@ export function extractBearerToken(req: http.IncomingMessage): string | undefine
   return undefined;
 }
 
+/** True for the loopback clients allowed to read sensitive routes without a key. */
+export function isLoopbackAddress(addr: string | undefined): boolean {
+  if (!addr) return false;
+  const a = addr.trim().toLowerCase();
+  return (
+    a === "127.0.0.1" ||
+    a === "::1" ||
+    a === "localhost" ||
+    a === "::ffff:127.0.0.1"
+  );
+}
+
 export function json(
   res: http.ServerResponse,
   status: number,

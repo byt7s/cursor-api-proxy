@@ -29,6 +29,7 @@ With the proxy **running**, open:
 | `http://127.0.0.1:8765/wiki` | **Wiki** — the same app, opened on the Wiki route, rendering `docs/WIKI.md` |
 | `http://127.0.0.1:8765/accounts` | JSON list of saved Cursor accounts (auth method, email, plan/usage when available) |
 | `http://127.0.0.1:8765/healthz` | Plain **`ok`** (for scripts and load checks) |
+| `http://127.0.0.1:8765/metrics` | **Prometheus** text exposition (loopback-only unless `CURSOR_BRIDGE_API_KEY` is set) |
 | `http://127.0.0.1:8765/health` | JSON health payload (version, workspace, default model, …) |
 
 Port **`8765`** is the default (`CURSOR_BRIDGE_PORT`). Host defaults to **`127.0.0.1`** (`CURSOR_BRIDGE_HOST`).
@@ -127,6 +128,7 @@ The plist label is **`com.cursor-api-proxy`**. Use **`cursor-api-proxy disable`*
 **LLM / health / accounts**
 
 - `GET /health`, `GET /healthz`, `GET /v1/models`
+- `GET /metrics` — Prometheus text format (`text/plain; version=0.0.4`). Bearer when `CURSOR_BRIDGE_API_KEY` is set, loopback-only otherwise, **404** when `CURSOR_BRIDGE_METRICS_ENABLED=false`. Exposes `cursor_proxy_requests_total`, `cursor_proxy_request_duration_seconds`, `cursor_proxy_span_duration_seconds` (latency waterfall), `cursor_proxy_admission_in_use` / `_limit`, `cursor_proxy_account_state`, `cursor_proxy_failover_total`, `cursor_proxy_rate_limited_total`, `cursor_proxy_build_info`
 - `GET /accounts` — JSON account pool listing (same data as `cursor-api-proxy accounts`; dashboard table uses `/api/accounts`)
 - `POST /v1/chat/completions`, `POST /v1/responses`, `POST /v1/messages`
 
@@ -135,6 +137,7 @@ The plist label is **`com.cursor-api-proxy`**. Use **`cursor-api-proxy disable`*
 - `GET /` and `GET /wiki` both serve `public/dashboard/index.html`; `GET /static/*` serves `public/*`, so bundles resolve at `/static/dashboard/assets/…` (always open)
 - `GET /api/status`, `GET /api/log`, `GET /api/stats`, `GET /api/wiki`
 - Sensitive reads (Bearer when `CURSOR_BRIDGE_API_KEY` is set): `GET /api/config`, `GET /api/accounts`, `GET /api/doctor`, `GET /api/requests?limit=`
+- `GET /api/requests` returns `{ path, source, requests }`. With the structured log enabled (`source: "jsonl"`) each entry carries `durationMs`, `model`, `engine`, `account`, `streaming`, `errorCode`, `failoverCount`, `spans` and prompt/completion character counts; the **Requests** page opens any row for the latency waterfall and the raw record. Without it (`source: "text"`) entries are the four fields parsed from `sessions.log`.
 - Mutations (Bearer when key set; else loopback only):
   - `POST /api/control` `{ "action": "start" | "stop" | "restart" | "enable" | "disable" }`
   - `POST /api/log/clear`
@@ -163,6 +166,7 @@ The plist label is **`com.cursor-api-proxy`**. Use **`cursor-api-proxy disable`*
 | `docs/WIKI.md` | Wiki source |
 | `scripts/cursor-api-proxy` | Launcher script (symlink target) |
 | `~/.cursor-api-proxy/sessions.log` | Default request log (one line per finished response) |
+| `~/.cursor-api-proxy/requests.jsonl` | Structured request log (one JSON record per response; rotates to `.1`, see `CURSOR_BRIDGE_REQUESTS_LOG*`) |
 | `~/.cursor-api-proxy/proxy.log` | Launcher / background stdout+stderr |
 | `~/.cursor-api-proxy/proxy.pid` | Written by the running Node process for the dashboard |
 
@@ -186,7 +190,13 @@ Install the launcher to `~/.local/bin/cursor-api-proxy` (see [install](#install-
 
 **Dashboard shows “no requests”**
 
-Stats are parsed from **`sessions.log`** lines in the form logged by the proxy (`ISO8601 METHOD PATH REMOTE STATUS`). If the log path was overridden (`CURSOR_BRIDGE_SESSIONS_LOG`), the dashboard reads that file instead.
+Stats are parsed from **`sessions.log`** lines in the form logged by the proxy (`ISO8601 METHOD PATH REMOTE STATUS`). If the log path was overridden (`CURSOR_BRIDGE_SESSIONS_LOG`), the dashboard reads that file instead. The **Requests** page prefers `requests.jsonl` and falls back to that text log, so a row without model/duration detail means the structured log is disabled or still empty.
+
+**`/metrics` returns 401, 403 or 404**
+
+- **401** — `CURSOR_BRIDGE_API_KEY` is set, so the scrape needs `Authorization: Bearer <key>`.
+- **403** — no key is configured and the scrape came from a non-loopback address. Set a key (and scrape with it) or run Prometheus on the same host.
+- **404** — `CURSOR_BRIDGE_METRICS_ENABLED=false`.
 
 **`503` / admission capacity under parallel prompts**
 

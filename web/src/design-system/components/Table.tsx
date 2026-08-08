@@ -25,6 +25,11 @@ export type TableProps<Row> = {
   emptyTitle?: ReactNode;
   emptyDescription?: ReactNode;
   emptyActions?: ReactNode;
+  /**
+   * Activates a row on click (for detail panels). Row semantics are kept
+   * intact, so pair this with a focusable control in a cell for keyboard users.
+   */
+  onRowClick?: (row: Row) => void;
   className?: string;
 };
 
@@ -39,6 +44,7 @@ export function Table<Row>({
   emptyTitle = "Nothing to show",
   emptyDescription,
   emptyActions,
+  onRowClick,
   className,
 }: TableProps<Row>) {
   const [sort, setSort] = useState<SortState>(null);
@@ -132,7 +138,11 @@ export function Table<Row>({
         </thead>
         <tbody>
           {sortedRows.map((row, index) => (
-            <tr key={rowKey(row, index)}>
+            <tr
+              key={rowKey(row, index)}
+              className={cx(onRowClick && styles.clickableRow)}
+              onClick={onRowClick ? () => onRowClick(row) : undefined}
+            >
               {columns.map((column) => (
                 <td
                   key={column.key}
