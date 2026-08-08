@@ -99,15 +99,45 @@ async function post(
   server: http.Server,
   pathName: string,
   body: unknown,
-): Promise<{ status: number; json: any }> {
+): Promise<{ status: number; json: any; headers: Headers }> {
   const addr = server.address() as { port: number };
   const res = await fetch(`http://127.0.0.1:${addr.port}${pathName}`, {
     method: "POST",
     headers: { "content-type": "application/json" },
     body: JSON.stringify(body),
   });
-  return { status: res.status, json: await res.json() };
+  const text = await res.text();
+  let json: any = {};
+  try {
+    json = text ? JSON.parse(text) : {};
+  } catch {
+    json = { raw: text };
+  }
+  return { status: res.status, json, headers: res.headers };
 }
+
+async function postStream(
+  server: http.Server,
+  pathName: string,
+  body: unknown,
+): Promise<{ status: number; body: string }> {
+  const addr = server.address() as { port: number };
+  const res = await fetch(`http://127.0.0.1:${addr.port}${pathName}`, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify(body),
+  });
+  return { status: res.status, body: await res.text() };
+}
+
+const lookupTool = {
+  name: "lookup",
+  description: "Lookup",
+  input_schema: {
+    type: "object",
+    properties: { q: { type: "string" } },
+  },
+};
 
 describe("API surface", () => {
   let server: http.Server;
@@ -222,5 +252,178 @@ describe("API surface", () => {
     expect(res.status).toBe(200);
     expect(res.json.stop_reason).toBe("end_turn");
     expect(res.json.content).toEqual([{ type: "text", text: "plain answer" }]);
+  });
+
+  it("rejects Anthropic image blocks on /v1/messages by default", async () => {
+    server = await start(createTestConfig());
+    const res = await post(server, "/v1/messages", {
+      model: "composer-2",
+      max_tokens: 64,
+      messages: [
+        {
+          role: "user",
+          content: [
+            { type: "text", text: "describe" },
+            {
+              type: "image",
+              source: {
+                type: "base64",
+                media_type: "image/png",
+                data: "aa",
+              },
+            },
+          ],
+        },
+      ],
+    });
+    expect(res.status).toBe(400);
+    expect(res.json.error.code).toBe("images_not_supported");
+    expect(runAgentSync).not.toHaveBeenCalled();
+  });
+
+  it("strips Anthropic images on /v1/messages when ignoreImages is true", async () => {
+    runAgentSync.mockResolvedValue({
+      code: 0,
+      stdout: "no vision",
+      stderr: "",
+    });
+    server = await start(createTestConfig({ ignoreImages: true }));
+    const res = await post(server, "/v1/messages", {
+      model: "composer-2",
+      max_tokens: 64,
+      messages: [
+        {
+          role: "user",
+          content: [
+            { type: "text", text: "describe" },
+            {
+              type: "image",
+              source: {
+                type: "base64",
+                media_type: "image/png",
+                data: "aa",
+              },
+            },
+          ],
+        },
+      ],
+    });
+    expect(res.status).toBe(200);
+    expect(res.json.content[0].text).toContain("no vision");
+    expect(runAgentSync).toHaveBeenCalled();
+  });
+
+  it("rejects Responses input_image by default and strips when ignoreImages", async () => {
+    server = await start(createTestConfig());
+    const denied = await post(server, "/v1/responses", {
+      model: "composer-2",
+      input: [
+        {
+          type: "message",
+          role: "user",
+          content: [
+            { type: "input_text", text: "describe" },
+            { type: "input_image", image_url: "https://x/y.png" },
+          ],
+        },
+      ],
+    });
+    expect(denied.status).toBe(400);
+    expect(denied.json.error.code).toBe("images_not_supported");
+    expect(runAgentSync).not.toHaveBeenCalled();
+
+    runAgentSync.mockResolvedValue({
+      code: 0,
+      stdout: "stripped ok",
+      stderr: "",
+    });
+    await new Promise<void>((resolve) => server.close(() => resolve()));
+    server = await start(createTestConfig({ ignoreImages: true }));
+    const addr = server.address() as { port: number };
+    const okRes = await fetch(`http://127.0.0.1:${addr.port}/v1/responses`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        model: "composer-2",
+        input: [
+          {
+            type: "message",
+            role: "user",
+            content: [
+              { type: "input_text", text: "describe" },
+              { type: "input_image", image_url: "https://x/y.png" },
+            ],
+          },
+        ],
+      }),
+    });
+    expect(okRes.status).toBe(200);
+    expect(okRes.headers.get("x-cursor-proxy-images-ignored")).toBe("true");
+    const okJson = (await okRes.json()) as {
+      output_text?: string;
+      output?: Array<{ content?: Array<{ text?: string }> }>;
+    };
+    const text =
+      okJson.output_text ??
+      okJson.output?.[0]?.content?.[0]?.text ??
+      "";
+    expect(text).toContain("stripped ok");
+    expect(runAgentSync).toHaveBeenCalled();
+  });
+
+  it("buffers Anthropic streaming tool_use when toolCalls is enabled", async () => {
+    runAgentStream.mockImplementation(
+      async (
+        _cfg: unknown,
+        _ws: unknown,
+        _chat: unknown,
+        _args: unknown,
+        onChunk: (t: string) => void,
+      ) => {
+        onChunk('{"name":"lookup",');
+        onChunk('"arguments":{"q":"streamed"}}');
+        return { code: 0, stderr: "" };
+      },
+    );
+    server = await start(
+      createTestConfig({ toolCalls: true, useAcp: true }),
+    );
+    const res = await postStream(server, "/v1/messages", {
+      model: "composer-2",
+      max_tokens: 64,
+      stream: true,
+      tools: [lookupTool],
+      messages: [{ role: "user", content: "find streamed" }],
+    });
+    expect(res.status).toBe(200);
+    expect(res.body).not.toContain('"text_delta"');
+    expect(res.body).toContain('"type":"tool_use"');
+    expect(res.body).toContain('"name":"lookup"');
+    expect(res.body).toContain('"stop_reason":"tool_use"');
+    expect(res.body).toContain('"type":"message_stop"');
+  });
+
+  it("keeps plain Anthropic text when tools are present but toolCalls is false", async () => {
+    runAgentSync.mockResolvedValue({
+      code: 0,
+      stdout: '{"name":"lookup","arguments":{"q":"hi"}}',
+      stderr: "",
+    });
+    server = await start(createTestConfig({ toolCalls: false }));
+    const res = await post(server, "/v1/messages", {
+      model: "composer-2",
+      max_tokens: 64,
+      tools: [lookupTool],
+      messages: [{ role: "user", content: "find hi" }],
+    });
+    expect(res.status).toBe(200);
+    expect(res.json.stop_reason).toBe("end_turn");
+    expect(res.json.content).toEqual([
+      {
+        type: "text",
+        text: '{"name":"lookup","arguments":{"q":"hi"}}',
+      },
+    ]);
+    expect(JSON.stringify(res.json)).not.toContain('"tool_use"');
   });
 });

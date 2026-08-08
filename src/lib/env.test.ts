@@ -170,6 +170,17 @@ describe("loadEnvConfig", () => {
     ).toThrow(/CURSOR_BRIDGE_MODEL_ALIASES/);
   });
 
+  it("parses CURSOR_BRIDGE_IGNORE_IMAGES (default false)", () => {
+    expect(loadEnvConfig({ env: {} }).ignoreImages).toBe(false);
+    expect(
+      loadEnvConfig({ env: { CURSOR_BRIDGE_IGNORE_IMAGES: "true" } })
+        .ignoreImages,
+    ).toBe(true);
+    expect(
+      loadEnvConfig({ env: { CURSOR_BRIDGE_IGNORE_IMAGES: "0" } }).ignoreImages,
+    ).toBe(false);
+  });
+
   it("parses CURSOR_BRIDGE_MODE and marks chat-only env as explicit", () => {
     const loaded = loadEnvConfig({
       env: {
