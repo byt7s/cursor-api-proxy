@@ -393,7 +393,7 @@ export function loadEnvConfig(opts: EnvOptions = {}): LoadedEnv {
     verbose: envBool(env, ["CURSOR_BRIDGE_VERBOSE"], false),
     maxMode: envBool(env, ["CURSOR_BRIDGE_MAX_MODE"], false),
     promptViaStdin: envBool(env, ["CURSOR_BRIDGE_PROMPT_VIA_STDIN"], false),
-    useAcp: envBool(env, ["CURSOR_BRIDGE_USE_ACP"], false),
+    useAcp: envBool(env, ["CURSOR_BRIDGE_USE_ACP"], true),
     configDirs,
     multiPort: envBool(env, ["CURSOR_BRIDGE_MULTI_PORT"], false),
     winCmdlineMax,

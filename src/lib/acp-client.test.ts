@@ -86,7 +86,7 @@ describe("runAcpSync", () => {
       env: { FAKE_ACP_SCENARIO: "with_thought" },
     });
     expect(result.code).toBe(0);
-    expect(result.stdout).toBe("Hello from fake ACP");
+    expect(result.stdout).toBe("Hello from fake ACP (fake)");
     expect(result.stdout).not.toContain("SECRET_THOUGHT");
     expect(result.reasoning).toBe("SECRET_THOUGHT");
   });
@@ -217,7 +217,7 @@ describe("runAcpStream", () => {
       (t) => chunks.push(t),
     );
     expect(result.code).toBe(0);
-    expect(chunks.join("")).toBe("Hello from fake ACP");
+    expect(chunks.join("")).toBe("Hello from fake ACP (fake)");
     expect(chunks.join("")).not.toContain("SECRET_THOUGHT");
   });
 

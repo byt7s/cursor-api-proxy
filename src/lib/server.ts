@@ -5,6 +5,7 @@ import * as https from "node:https";
 import type { BridgeConfig } from "./config.js";
 import { createRequestListener } from "./request-listener.js";
 import { initAccountPool } from "./account-pool.js";
+import { shutdownAcpWarmPool, startAcpWarmPool } from "./acp-pool.js";
 import { killAllChildProcesses } from "./process.js";
 
 function acpLauncherLabel(acpArgs: string[]): string {
@@ -41,10 +42,25 @@ export function startBridgeServer(
         const server = startSingleServer(serverOpts);
         servers.push(server);
       });
+      if (config.useAcp) {
+        void startAcpWarmPool(config).catch((err) => {
+          console.warn(
+            `[acp-pool] warm start failed: ${err instanceof Error ? err.message : String(err)}`,
+          );
+        });
+      }
       return servers;
     } else {
       initAccountPool(config.configDirs);
     }
+  }
+
+  if (config.useAcp) {
+    void startAcpWarmPool(config).catch((err) => {
+      console.warn(
+        `[acp-pool] warm start failed: ${err instanceof Error ? err.message : String(err)}`,
+      );
+    });
   }
 
   servers.push(startSingleServer(opts));
@@ -69,6 +85,7 @@ export function setupGracefulShutdown(
     );
 
     // Stop accepting new connections and kill all in-flight agent processes
+    shutdownAcpWarmPool();
     killAllChildProcesses();
 
     const closePromises = servers.map(
@@ -135,7 +152,7 @@ function startSingleServer(
     );
     console.log(`- agent bin: ${config.agentBin}`);
     console.log(
-      `- ACP: ${config.useAcp ? "yes" : "no"}${config.useAcp ? ` (launcher: ${acpLauncherLabel(config.acpArgs)})` : ""}`,
+      `- ACP: ${config.useAcp ? "yes (warm pool)" : "no"}${config.useAcp ? ` (launcher: ${acpLauncherLabel(config.acpArgs)})` : ""}`,
     );
     console.log(`- workspace: ${config.workspace}`);
     console.log(`- mode: ${config.mode}`);
