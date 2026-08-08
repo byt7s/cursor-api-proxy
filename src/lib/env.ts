@@ -72,10 +72,14 @@ export type LoadedEnv = {
    * From `CURSOR_BRIDGE_CONTEXT_EXTRA`; stripped of NUL, max 400 UTF-16 units.
    */
   contextExtra?: string;
-  /** Global cap on concurrent agent runs (ACP/CLI). */
+  /** Global cap on concurrent ACP/CLI agent runs. */
   maxConcurrentRuns: number;
-  /** Per-account cap on concurrent agent runs. */
+  /** Per-account cap on concurrent ACP/CLI agent runs. */
   maxConcurrentRunsPerAccount: number;
+  /** Global cap on concurrent in-process SDK agent runs (higher default). */
+  sdkMaxConcurrentRuns: number;
+  /** Per-account cap on concurrent SDK agent runs. */
+  sdkMaxConcurrentRunsPerAccount: number;
   /** How long to wait for an admission permit before 503. */
   admissionWaitMs: number;
   /**
@@ -452,6 +456,18 @@ export function loadEnvConfig(opts: EnvOptions = {}): LoadedEnv {
     maxConcurrentRunsPerAccount: Math.max(
       0,
       envNumber(env, ["CURSOR_BRIDGE_MAX_CONCURRENT_RUNS_PER_ACCOUNT"], 2),
+    ),
+    sdkMaxConcurrentRuns: Math.max(
+      0,
+      envNumber(env, ["CURSOR_BRIDGE_MAX_CONCURRENT_RUNS_SDK"], 48),
+    ),
+    sdkMaxConcurrentRunsPerAccount: Math.max(
+      0,
+      envNumber(
+        env,
+        ["CURSOR_BRIDGE_MAX_CONCURRENT_RUNS_PER_ACCOUNT_SDK"],
+        12,
+      ),
     ),
     admissionWaitMs: Math.max(
       0,

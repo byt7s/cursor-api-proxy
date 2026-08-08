@@ -29,6 +29,8 @@ export function startBridgeServer(
   configureAdmission({
     maxConcurrentRuns: config.maxConcurrentRuns,
     maxConcurrentRunsPerAccount: config.maxConcurrentRunsPerAccount,
+    sdkMaxConcurrentRuns: config.sdkMaxConcurrentRuns,
+    sdkMaxConcurrentRunsPerAccount: config.sdkMaxConcurrentRunsPerAccount,
     waitMs: config.admissionWaitMs,
   });
 

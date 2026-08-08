@@ -62,6 +62,8 @@ function createTestConfig(
     bridgePackageVersion: "0.0.0-test",
     maxConcurrentRuns: 16,
     maxConcurrentRunsPerAccount: 2,
+    sdkMaxConcurrentRuns: 48,
+    sdkMaxConcurrentRunsPerAccount: 12,
     admissionWaitMs: 0,
     latencyWaterfall: true,
     thoughtMode: "drop",

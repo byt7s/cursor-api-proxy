@@ -173,7 +173,7 @@ Stats are parsed from **`sessions.log`** lines in the form logged by the proxy (
 
 **`503` / admission capacity under parallel prompts**
 
-Defaults cap concurrent ACP/CLI runs at **16** global and **2 per account** (`CURSOR_BRIDGE_MAX_CONCURRENT_RUNS*`, wait `CURSOR_BRIDGE_ADMISSION_WAIT_MS`). With few accounts the per-account cap is the usual bottleneck. Raise it only with RAM headroom, or add accounts to spread load and Cursor rate limits. `GET /healthz` reports current admission limits and in-use counts. See the README env table (**Admission tuning** note).
+ACP/CLI and SDK use **separate** admission planes. ACP defaults: **16** global / **2** per account. SDK defaults: **48** / **12** (`CURSOR_BRIDGE_MAX_CONCURRENT_RUNS*_SDK`). With few accounts the per-account cap is the usual bottleneck. Raise the matching plane only with headroom (RAM for ACP; rate limits / CPU for SDK), or add accounts. `GET /healthz` reports `admission.acp` and `admission.sdk`. See the README env table (**Admission tuning** note).
 
 ---
 
