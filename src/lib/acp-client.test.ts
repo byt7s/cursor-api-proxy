@@ -50,10 +50,10 @@ describe("resolveAcpModelConfigValue", () => {
     ).toBe("gpt-4[fast=false]");
   });
 
-  it("falls back to default[] when name not in catalog", () => {
-    expect(
+  it("throws when a non-default name is not in the catalog", () => {
+    expect(() =>
       resolveAcpModelConfigValue("unknown", [{ modelId: "x[]", name: "gpt-4" }]),
-    ).toBe("default[]");
+    ).toThrow(/model_not_found:/);
   });
 
   it("uses first match when duplicate names", () => {
