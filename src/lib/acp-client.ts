@@ -51,7 +51,7 @@ export type AcpStreamResult = {
 const DEFAULT_REQUEST_TIMEOUT_MS = 60_000;
 
 /** Avoid passing the entire parent environment into ACP children (may contain unrelated secrets). */
-function buildAcpSpawnEnv(
+export function buildAcpSpawnEnv(
   extra?: Record<string, string | undefined>,
 ): NodeJS.ProcessEnv {
   const inheritKeys = [
@@ -97,7 +97,7 @@ type AcpParsedMsg = {
 };
 
 /** Normalise CRLF / stray CR so JSON-RPC lines parse on Windows (avoids silent hangs). */
-function parseAcpStdoutLine(line: string): AcpParsedMsg | null {
+export function parseAcpStdoutLine(line: string): AcpParsedMsg | null {
   const t = line.replace(/\r$/, "").trim();
   if (!t) return null;
   try {
@@ -143,7 +143,7 @@ export function extractAcpUpdateText(
  *
  * Thought and message are separate channels: callers must not mix them into content.
  */
-function handleAcpNotification(
+export function handleAcpNotification(
   msg: AcpParsedMsg,
   opts: {
     rawDebug?: boolean;
@@ -245,7 +245,7 @@ export function resolveAcpModelConfigValue(
   return hit.modelId;
 }
 
-function sendRequest(
+export function sendAcpRequest(
   stdin: NodeJS.WritableStream,
   nextId: { current: number },
   method: string,
@@ -425,7 +425,7 @@ export function runAcpSync(
       }
       try {
         debugAcp("ACP step: initialize");
-        await sendRequest(child.stdin, nextId, "initialize", {
+        await sendAcpRequest(child.stdin, nextId, "initialize", {
           protocolVersion: 1,
           clientCapabilities: {
             fs: { readTextFile: false, writeTextFile: false },
@@ -436,7 +436,7 @@ export function runAcpSync(
 
         if (!opts.skipAuthenticate) {
           debugAcp("ACP step: authenticate");
-          await sendRequest(child.stdin, nextId, "authenticate", {
+          await sendAcpRequest(child.stdin, nextId, "authenticate", {
             methodId: "cursor_login",
           }, pending, requestTimeoutMs);
         } else {
@@ -444,7 +444,7 @@ export function runAcpSync(
         }
 
         debugAcp("ACP step: session/new");
-        const sessionResult = (await sendRequest(
+        const sessionResult = (await sendAcpRequest(
           child.stdin,
           nextId,
           "session/new",
@@ -468,7 +468,7 @@ export function runAcpSync(
           );
           if (resolvedModelId !== "default" && resolvedModelId !== "default[]") {
             debugAcp("ACP step: session/set_config_option (model)");
-            await sendRequest(
+            await sendAcpRequest(
               child.stdin,
               nextId,
               "session/set_config_option",
@@ -484,7 +484,7 @@ export function runAcpSync(
         }
 
         debugAcp("ACP step: session/prompt");
-        await sendRequest(child.stdin, nextId, "session/prompt", {
+        await sendAcpRequest(child.stdin, nextId, "session/prompt", {
           sessionId,
           prompt: [{ type: "text", text: prompt }],
         }, pending, requestTimeoutMs);
@@ -625,7 +625,7 @@ export function runAcpStream(
       }
       try {
         debugAcp("ACP step: initialize");
-        await sendRequest(child.stdin, nextId, "initialize", {
+        await sendAcpRequest(child.stdin, nextId, "initialize", {
           protocolVersion: 1,
           clientCapabilities: {
             fs: { readTextFile: false, writeTextFile: false },
@@ -636,7 +636,7 @@ export function runAcpStream(
 
         if (!opts.skipAuthenticate) {
           debugAcp("ACP step: authenticate");
-          await sendRequest(child.stdin, nextId, "authenticate", {
+          await sendAcpRequest(child.stdin, nextId, "authenticate", {
             methodId: "cursor_login",
           }, pending, requestTimeoutMs);
         } else {
@@ -644,7 +644,7 @@ export function runAcpStream(
         }
 
         debugAcp("ACP step: session/new");
-        const sessionResult = (await sendRequest(
+        const sessionResult = (await sendAcpRequest(
           child.stdin,
           nextId,
           "session/new",
@@ -668,7 +668,7 @@ export function runAcpStream(
           );
           if (resolvedModelId !== "default" && resolvedModelId !== "default[]") {
             debugAcp("ACP step: session/set_config_option (model)");
-            await sendRequest(
+            await sendAcpRequest(
               child.stdin,
               nextId,
               "session/set_config_option",
@@ -684,7 +684,7 @@ export function runAcpStream(
         }
 
         debugAcp("ACP step: session/prompt");
-        await sendRequest(child.stdin, nextId, "session/prompt", {
+        await sendAcpRequest(child.stdin, nextId, "session/prompt", {
           sessionId,
           prompt: [{ type: "text", text: prompt }],
         }, pending, requestTimeoutMs);

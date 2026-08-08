@@ -6,6 +6,7 @@ import {
   withAccountApiKeyArgs,
 } from "./account-api-key.js";
 import { runAcpStream, runAcpSync } from "./acp-client.js";
+import { getAcpWarmPool } from "./acp-pool.js";
 import type { BridgeConfig } from "./config.js";
 import type { CursorExecutionMode } from "./execution-mode.js";
 import { run, runStreaming } from "./process.js";
@@ -69,6 +70,15 @@ function extractModeFromCmdArgs(cmdArgs: string[]): CursorExecutionMode {
   return "ask";
 }
 
+function cleanupTemp(tempDir?: string): void {
+  if (!tempDir) return;
+  try {
+    fs.rmSync(tempDir, { recursive: true, force: true });
+  } catch {
+    /* ignore */
+  }
+}
+
 export function runAgentSync(
   config: BridgeConfig,
   workspaceDir: string,
@@ -82,6 +92,25 @@ export function runAgentSync(
   if (config.useAcp && typeof stdinPrompt === "string") {
     const acpModel = extractModelFromCmdArgs(cmdArgs);
     const acpMode = extractModeFromCmdArgs(cmdArgs);
+    const pool = getAcpWarmPool();
+    if (pool) {
+      return pool
+        .runSync({
+          configDir,
+          workspaceDir,
+          effectiveChatOnly,
+          prompt: stdinPrompt,
+          model: acpModel,
+          mode: acpMode,
+          signal,
+        })
+        .then((out) => {
+          cacheTokenForAccount(configDir);
+          cleanupTemp(tempDir);
+          return out;
+        });
+    }
+
     let args = acpArgsWithWorkspace(config.acpArgs, workspaceDir);
     args = acpModel ? acpArgsWithModel(args, acpModel) : args;
     args = acpArgsWithMode(args, acpMode);
@@ -113,13 +142,7 @@ export function runAgentSync(
       signal,
     }).then((out) => {
       cacheTokenForAccount(configDir);
-      if (tempDir) {
-        try {
-          fs.rmSync(tempDir, { recursive: true, force: true });
-        } catch {
-          /* ignore */
-        }
-      }
+      cleanupTemp(tempDir);
       return out;
     });
   }
@@ -139,13 +162,7 @@ export function runAgentSync(
     signal,
   }).then((out) => {
     cacheTokenForAccount(configDir);
-    if (tempDir) {
-      try {
-        fs.rmSync(tempDir, { recursive: true, force: true });
-      } catch {
-        /* ignore */
-      }
-    }
+    cleanupTemp(tempDir);
     return out;
   });
 }
@@ -166,6 +183,28 @@ export function runAgentStream(
   if (config.useAcp && typeof stdinPrompt === "string") {
     const acpModel = extractModelFromCmdArgs(cmdArgs);
     const acpMode = extractModeFromCmdArgs(cmdArgs);
+    const pool = getAcpWarmPool();
+    if (pool) {
+      return pool
+        .runStream(
+          {
+            configDir,
+            workspaceDir,
+            effectiveChatOnly,
+            prompt: stdinPrompt,
+            model: acpModel,
+            mode: acpMode,
+            signal,
+          },
+          onLine,
+        )
+        .then((result) => {
+          cacheTokenForAccount(configDir);
+          cleanupTemp(tempDir);
+          return result;
+        });
+    }
+
     let args = acpArgsWithWorkspace(config.acpArgs, workspaceDir);
     args = acpModel ? acpArgsWithModel(args, acpModel) : args;
     args = acpArgsWithMode(args, acpMode);
@@ -202,13 +241,7 @@ export function runAgentStream(
       onLine,
     ).then((result) => {
       cacheTokenForAccount(configDir);
-      if (tempDir) {
-        try {
-          fs.rmSync(tempDir, { recursive: true, force: true });
-        } catch {
-          /* ignore */
-        }
-      }
+      cleanupTemp(tempDir);
       return result;
     });
   }
@@ -229,13 +262,7 @@ export function runAgentStream(
     signal,
   }).then((result) => {
     cacheTokenForAccount(configDir);
-    if (tempDir) {
-      try {
-        fs.rmSync(tempDir, { recursive: true, force: true });
-      } catch {
-        /* ignore */
-      }
-    }
+    cleanupTemp(tempDir);
     return result;
   });
 }
