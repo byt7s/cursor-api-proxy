@@ -117,6 +117,31 @@ const GROUPS: Group[] = [
     ],
   },
   {
+    title: "Observability",
+    description: "Structured request log and Prometheus endpoint",
+    items: (c) => [
+      {
+        key: "requestsLog",
+        label: "Requests log (JSONL)",
+        value: c.requestsLogPath,
+        mono: true,
+      },
+      {
+        key: "requestsLogEnabled",
+        label: "Requests log enabled",
+        value: bool(c.requestsLogEnabled),
+      },
+      {
+        key: "requestsLogMaxBytes",
+        label: "Rotate at",
+        value: c.requestsLogMaxBytes
+          ? `${Math.round(c.requestsLogMaxBytes / (1024 * 1024))} MB`
+          : "never",
+      },
+      { key: "metrics", label: "GET /metrics", value: bool(c.metricsEnabled) },
+    ],
+  },
+  {
     title: "Security",
     description: "Inbound auth gates (secret values are never sent to the browser)",
     items: (c) => [

@@ -7,6 +7,7 @@ import {
 } from "./execution-engine.js";
 import type { CursorExecutionMode } from "./execution-mode.js";
 import { tryParseExecutionModeEnv } from "./execution-mode.js";
+import { DEFAULT_REQUESTS_LOG_MAX_BYTES } from "./request-record.js";
 
 export type EnvSource = Record<string, string | undefined>;
 
@@ -36,6 +37,14 @@ export type LoadedEnv = {
   tlsCertPath?: string;
   tlsKeyPath?: string;
   sessionsLogPath: string;
+  /** Structured JSONL request log (see CURSOR_BRIDGE_REQUESTS_LOG). */
+  requestsLogPath: string;
+  /** When true (default), append one JSON record per request. */
+  requestsLogEnabled: boolean;
+  /** Rotate the JSONL log to `.1` past this size (0 disables rotation). */
+  requestsLogMaxBytes: number;
+  /** When true (default), serve GET /metrics (Prometheus text format). */
+  metricsEnabled: boolean;
   chatOnlyWorkspace: boolean;
   /** True when CURSOR_BRIDGE_CHAT_ONLY_WORKSPACE key exists in env. */
   chatOnlyWorkspaceExplicit: boolean;
@@ -355,6 +364,16 @@ export function loadEnvConfig(opts: EnvOptions = {}): LoadedEnv {
     return path.join(cwd, "sessions.log");
   })();
 
+  const requestsLogPath = (() => {
+    const explicit = resolveAbsolutePath(
+      envString(env, ["CURSOR_BRIDGE_REQUESTS_LOG"]),
+      cwd,
+    );
+    if (explicit) return explicit;
+    if (home) return path.join(home, ".cursor-api-proxy", "requests.jsonl");
+    return path.join(cwd, "requests.jsonl");
+  })();
+
   const force = envBool(env, ["CURSOR_BRIDGE_FORCE"], false);
 
   const rawConfigDirs = envString(env, [
@@ -430,6 +449,21 @@ export function loadEnvConfig(opts: EnvOptions = {}): LoadedEnv {
       cwd,
     ),
     sessionsLogPath,
+    requestsLogPath,
+    requestsLogEnabled: envBool(
+      env,
+      ["CURSOR_BRIDGE_REQUESTS_LOG_ENABLED"],
+      true,
+    ),
+    requestsLogMaxBytes: Math.max(
+      0,
+      envNumber(
+        env,
+        ["CURSOR_BRIDGE_REQUESTS_LOG_MAX_BYTES"],
+        DEFAULT_REQUESTS_LOG_MAX_BYTES,
+      ),
+    ),
+    metricsEnabled: envBool(env, ["CURSOR_BRIDGE_METRICS_ENABLED"], true),
     chatOnlyWorkspaceExplicit,
     chatOnlyWorkspace: envBool(
       env,

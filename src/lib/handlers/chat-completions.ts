@@ -53,6 +53,10 @@ import {
 } from "../win-cmdline-limit.js";
 import { LatencyWaterfall } from "../latency-waterfall.js";
 import {
+  annotateRequest,
+  countRequestFailover,
+} from "../request-record.js";
+import {
   thoughtStreamDelta,
   withReasoningContent,
 } from "../thought-mode.js";
@@ -72,6 +76,36 @@ function logLatency(
 ): void {
   if (!config.latencyWaterfall) return;
   latency.logLine(extra);
+}
+
+/** Stable error codes for the structured request log (see request-record.ts). */
+const OUTCOME_ERROR_CODES: Record<string, string> = {
+  error: "cursor_cli_error",
+  aborted: "client_aborted",
+  all_rate_limited: "all_rate_limited",
+  all_disabled: "all_disabled",
+};
+
+/** Record which account/engine served the request, plus its error code. */
+function noteOutcome(
+  res: http.ServerResponse,
+  config: BridgeConfig,
+  outcome: { status: string; configDir?: string },
+  stderr?: string,
+): void {
+  const sdkFailure =
+    outcome.status === "error" && /sdk_run_error/i.test(stderr ?? "");
+  annotateRequest(res, {
+    ...(outcome.configDir ? { account: outcome.configDir } : {}),
+    engine: resolveAccountEngine(outcome.configDir, config.defaultEngine),
+    ...(outcome.status === "ok"
+      ? {}
+      : {
+          errorCode: sdkFailure
+            ? "sdk_run_error"
+            : (OUTCOME_ERROR_CODES[outcome.status] ?? outcome.status),
+        }),
+  });
 }
 
 /** Approximate ACP/CLI ready → first token when finer agent marks are unavailable. */
@@ -246,7 +280,16 @@ export async function handleChatCompletions(
     // Drop pin so the next account starts a virgin session; clients already
     // resend message history for context replay.
     if (conversationId) clearSessionAffinity(conversationId);
+    countRequestFailover(res);
   };
+
+  annotateRequest(res, {
+    model: displayModel,
+    streaming: Boolean(body.stream),
+    promptChars: agentPrompt.length,
+    latency,
+    ...(conversationId ? { conversationId } : {}),
+  });
 
   const truncatedHeaders = fit.truncated
     ? { "X-Cursor-Proxy-Prompt-Truncated": "true" }
@@ -299,6 +342,7 @@ export async function handleChatCompletions(
 
     const finishChatStream = (accumulated: string) => {
       if (!latency.has("model_complete")) latency.mark("model_complete");
+      annotateRequest(res, { completionChars: accumulated.length });
       logTrafficResponse(
         config.verbose,
         model ?? cursorModel,
@@ -326,6 +370,7 @@ export async function handleChatCompletions(
       accumulatedThought: string,
     ) => {
       if (!latency.has("model_complete")) latency.mark("model_complete");
+      annotateRequest(res, { completionChars: accumulated.length });
       logTrafficResponse(
         config.verbose,
         model ?? cursorModel,
@@ -438,6 +483,12 @@ export async function handleChatCompletions(
             return result;
           },
         });
+        noteOutcome(
+          res,
+          config,
+          outcome,
+          outcome.status === "aborted" ? undefined : outcome.stderr,
+        );
         if (
           conversationId &&
           outcome.status === "ok" &&
@@ -562,6 +613,7 @@ export async function handleChatCompletions(
           res.write("data: [DONE]\n\n");
         }
         if (err instanceof AdmissionCapacityError) {
+          annotateRequest(res, { errorCode: "agent_capacity" });
           latency.mark("shape_done");
           logLatency(config, latency, { ok: false, model: displayModel });
           res.write(
@@ -629,6 +681,12 @@ export async function handleChatCompletions(
           return result;
         },
       });
+      noteOutcome(
+        res,
+        config,
+        outcome,
+        outcome.status === "aborted" ? undefined : outcome.stderr,
+      );
       if (
         conversationId &&
         outcome.status === "ok" &&
@@ -765,6 +823,12 @@ export async function handleChatCompletions(
       onAccountFailover,
     },
   );
+  noteOutcome(
+    res,
+    config,
+    outcome,
+    outcome.status === "aborted" ? undefined : outcome.result?.stderr,
+  );
   if (
     conversationId &&
     outcome.status === "ok" &&
@@ -853,6 +917,7 @@ export async function handleChatCompletions(
   if (!latency.has("model_first_byte")) latency.mark("model_first_byte");
   if (!latency.has("model_complete")) latency.mark("model_complete");
   const content = (outcome.result.stdout ?? "").trim();
+  annotateRequest(res, { completionChars: content.length });
   logTrafficResponse(config.verbose, model ?? cursorModel, content, false);
 
   const promptTokens = Math.max(1, Math.round(agentPrompt.length / 4));

@@ -34,6 +34,10 @@
   background: var(--color-hover-overlay);
 }
 
+.clickableRow {
+  cursor: pointer;
+}
+
 .table tbody tr:last-child td {
   border-block-end: 0;
 }

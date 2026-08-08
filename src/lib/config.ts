@@ -44,6 +44,14 @@ export type BridgeConfig = {
   tlsKeyPath?: string;
   /** Path to sessions log file; each request is appended as a line. Default: sessions.log in cwd. */
   sessionsLogPath: string;
+  /** Structured JSONL request log path (see CURSOR_BRIDGE_REQUESTS_LOG). */
+  requestsLogPath: string;
+  /** When true (default), append one JSON record per request to requestsLogPath. */
+  requestsLogEnabled: boolean;
+  /** Rotate the JSONL log to `.1` past this size (0 disables rotation). */
+  requestsLogMaxBytes: number;
+  /** When true (default), expose GET /metrics in Prometheus text format. */
+  metricsEnabled: boolean;
   /** When true (default), run CLI in an empty temp dir so it cannot read or write the real project. Pure chat only. */
   chatOnlyWorkspace: boolean;
   /** True when CURSOR_BRIDGE_CHAT_ONLY_WORKSPACE was set in the environment (any value). */
@@ -133,6 +141,10 @@ export function loadBridgeConfig(opts: EnvOptions = {}): BridgeConfig {
     tlsCertPath: env.tlsCertPath,
     tlsKeyPath: env.tlsKeyPath,
     sessionsLogPath: env.sessionsLogPath,
+    requestsLogPath: env.requestsLogPath,
+    requestsLogEnabled: env.requestsLogEnabled,
+    requestsLogMaxBytes: env.requestsLogMaxBytes,
+    metricsEnabled: env.metricsEnabled,
     chatOnlyWorkspace: env.chatOnlyWorkspace,
     chatOnlyWorkspaceExplicit: env.chatOnlyWorkspaceExplicit,
     verbose: env.verbose,

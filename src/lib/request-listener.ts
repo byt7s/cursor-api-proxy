@@ -14,8 +14,15 @@ import {
   adminDashboardMatches,
   handleAdminDashboard,
 } from "./admin-dashboard.js";
+import { handleMetrics, METRICS_PATH } from "./handlers/metrics.js";
 import { extractBearerToken, json, readBody } from "./http.js";
+import { observeRequest } from "./metrics.js";
 import { appendSessionLine, logIncoming } from "./request-log.js";
+import {
+  appendRequestRecord,
+  buildRequestRecord,
+  getRequestAnnotation,
+} from "./request-record.js";
 
 export type BridgeServerOptions = {
   version: string;
@@ -42,8 +49,12 @@ export function createRequestListener(opts: BridgeServerOptions) {
     // self-referential noise that pollutes the live log tail the dashboard
     // reads from the sessions log file.
     const isAdminDashboardReq = adminDashboardMatches(req);
+    const isMetricsReq = req.method === "GET" && pathname === METRICS_PATH;
 
-    if (!isAdminDashboardReq) {
+    // Dashboard polls and metrics scrapes are self-referential noise: they stay
+    // out of both request logs and out of the request counters.
+    if (!isAdminDashboardReq && !isMetricsReq) {
+      const startedAt = Date.now();
       logIncoming(method, pathname, remoteAddress);
       res.on("finish", () => {
         appendSessionLine(
@@ -53,6 +64,28 @@ export function createRequestListener(opts: BridgeServerOptions) {
           remoteAddress,
           res.statusCode,
         );
+        const record = buildRequestRecord({
+          method,
+          pathname,
+          remoteAddress,
+          status: res.statusCode,
+          durationMs: Date.now() - startedAt,
+          annotation: getRequestAnnotation(res),
+        });
+        appendRequestRecord(record, {
+          enabled: config.requestsLogEnabled,
+          logPath: config.requestsLogPath,
+          maxBytes: config.requestsLogMaxBytes,
+        });
+        observeRequest({
+          route: record.pathname,
+          status: record.status,
+          model: record.model,
+          engine: record.engine,
+          account: record.account,
+          durationMs: record.durationMs,
+          spans: record.spans,
+        });
       });
     }
 
@@ -60,6 +93,11 @@ export function createRequestListener(opts: BridgeServerOptions) {
       if (req.method === "GET" && pathname === "/healthz") {
         res.writeHead(200, { "content-type": "text/plain" });
         res.end("ok\n");
+        return;
+      }
+
+      if (isMetricsReq) {
+        handleMetrics(req, res, opts);
         return;
       }
 

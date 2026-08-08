@@ -12,7 +12,8 @@ import { runResetHwid } from "../cli/reset-hwid.js";
 import { writeAccountApiKey } from "./account-api-key.js";
 import type { BridgeConfig } from "./config.js";
 import { runDoctor } from "./doctor.js";
-import { extractBearerToken } from "./http.js";
+import { extractBearerToken, isLoopbackAddress } from "./http.js";
+import { recentRequestRecords } from "./request-record.js";
 import {
   computeSessionStats,
   readLastLines,
@@ -173,6 +174,10 @@ function sanitizedBridgeConfig(config: BridgeConfig): Record<string, unknown> {
     workspace: config.workspace,
     timeoutMs: config.timeoutMs,
     sessionsLogPath: config.sessionsLogPath,
+    requestsLogPath: config.requestsLogPath,
+    requestsLogEnabled: config.requestsLogEnabled,
+    requestsLogMaxBytes: config.requestsLogMaxBytes,
+    metricsEnabled: config.metricsEnabled,
     chatOnlyWorkspace: config.chatOnlyWorkspace,
     verbose: config.verbose,
     maxMode: config.maxMode,
@@ -231,17 +236,6 @@ function parseQuery(url: string): Record<string, string> {
     if (k) out[decodeURIComponent(k)] = decodeURIComponent(v);
   }
   return out;
-}
-
-function isLoopbackAddress(addr: string | undefined): boolean {
-  if (!addr) return false;
-  const a = addr.trim().toLowerCase();
-  return (
-    a === "127.0.0.1" ||
-    a === "::1" ||
-    a === "localhost" ||
-    a === "::ffff:127.0.0.1"
-  );
 }
 
 function bearerMatches(requiredKey: string, req: http.IncomingMessage): boolean {
@@ -536,11 +530,28 @@ export function handleAdminDashboard(
   }
   if (req.method === "GET" && pathname === "/api/requests") {
     const limit = Math.min(200, Math.max(1, Number(q.limit) || 40));
-    return readLastLines(config.sessionsLogPath, 20_000, (err, lines) => {
-      if (err) return json(res, 500, { error: String(err) });
+    // Prefer the structured JSONL log (model, engine, account, latency spans)
+    // and fall back to parsing the plain-text sessions log when it is disabled
+    // or has not been written yet.
+    const serveTextLog = () =>
+      readLastLines(config.sessionsLogPath, 20_000, (err, lines) => {
+        if (err) return json(res, 500, { error: String(err) });
+        json(res, 200, {
+          path: config.sessionsLogPath,
+          source: "text",
+          requests: recentSessionRequests(lines, limit),
+        });
+      });
+
+    if (!config.requestsLogEnabled) return serveTextLog();
+
+    return readLastLines(config.requestsLogPath, 20_000, (err, lines) => {
+      const records = err ? [] : recentRequestRecords(lines, limit);
+      if (records.length === 0) return serveTextLog();
       json(res, 200, {
-        path: config.sessionsLogPath,
-        requests: recentSessionRequests(lines, limit),
+        path: config.requestsLogPath,
+        source: "jsonl",
+        requests: records,
       });
     });
   }
