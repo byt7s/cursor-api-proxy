@@ -27,6 +27,7 @@ import {
   json,
   readBody,
 } from "./http.js";
+import { publishDashboardEvent } from "./event-bus.js";
 import { observeRequest } from "./metrics.js";
 import { appendSessionLine, logIncoming } from "./request-log.js";
 import {
@@ -103,6 +104,10 @@ export function createRequestListener(opts: BridgeServerOptions) {
           durationMs: record.durationMs,
           spans: record.spans,
         });
+        // Non-blocking nudge for dashboard SSE subscribers.
+        publishDashboardEvent({ type: "request" });
+        publishDashboardEvent({ type: "stats" });
+        publishDashboardEvent({ type: "status" });
       });
     }
 

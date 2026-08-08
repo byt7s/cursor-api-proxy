@@ -20,7 +20,12 @@ import {
   type KeyValueItem,
   type TableColumn,
 } from "../design-system";
-import { useApiResource, usePolling, useSettings } from "../hooks";
+import {
+  useApiResource,
+  useDashboardEvents,
+  usePolling,
+  useSettings,
+} from "../hooks";
 import { api } from "../lib/api";
 import { formatDash, formatDateTime, formatTime } from "../lib/format";
 import type {
@@ -225,12 +230,23 @@ export function RequestsPage() {
     [limit],
   );
 
+  const eventsMode = useDashboardEvents(
+    {
+      onRequest: () => {
+        void requests.reload();
+      },
+      onStats: () => {
+        void requests.reload();
+      },
+    },
+    autoRefresh,
+  );
   usePolling(
     () => {
       void requests.reload();
     },
     poll.requestsMs,
-    autoRefresh,
+    autoRefresh && eventsMode !== "sse",
   );
 
   const detailColumns: Array<TableColumn<RequestRecord>> = [

@@ -11,6 +11,7 @@ import {
   Topbar,
 } from "./design-system";
 import {
+  DashboardEventsProvider,
   DashboardKeyProvider,
   SettingsProvider,
   StatusProvider,
@@ -191,9 +192,11 @@ export function App() {
       <DashboardKeyProvider>
         <ToastProvider>
           <SettingsProvider>
-            <StatusProvider>
-              <Dashboard />
-            </StatusProvider>
+            <DashboardEventsProvider>
+              <StatusProvider>
+                <Dashboard />
+              </StatusProvider>
+            </DashboardEventsProvider>
           </SettingsProvider>
         </ToastProvider>
       </DashboardKeyProvider>
