@@ -6,6 +6,8 @@ import { getAccountStats } from "../account-pool.js";
 import {
   ALL_ACCOUNTS_DISABLED_MESSAGE,
   ALL_ACCOUNTS_RATE_LIMITED_MESSAGE,
+  MODEL_NOT_ALLOWED_CODE,
+  MODEL_NOT_ALLOWED_MESSAGE,
   runStreamWithAccountFailover,
   runSyncWithAccountFailover,
 } from "../account-failover.js";
@@ -22,10 +24,8 @@ import {
 } from "../admission.js";
 import { runAgentStream, runAgentSync } from "../agent-runner.js";
 import { createStreamParser } from "../cli-stream-parser.js";
-import { resolveModelWithoutCatalog } from "../model-map.js";
 import {
   buildPromptFromMessages,
-  normalizeModelId,
   responsesInputToMessages,
   toolsToSystemText,
   type OpenAiResponsesRequest,
@@ -38,7 +38,7 @@ import {
   logTrafficResponse,
   type TrafficMessage,
 } from "../request-log.js";
-import { rememberResolvedModel, resolveModel } from "../resolve-model.js";
+import { resolveRequestModel } from "../resolve-request-model.js";
 import { resolveRequestMode } from "../resolve-mode.js";
 import { sanitizeMessages } from "../sanitize.js";
 import { resolveWorkspace } from "../workspace.js";
@@ -178,20 +178,14 @@ export async function handleResponses(
 ): Promise<void> {
   const { config, lastRequestedModelRef } = ctx;
   const body = JSON.parse(rawBody || "{}") as OpenAiResponsesRequest;
-  const requested = normalizeModelId(body.model);
-  const model = resolveModel(requested, lastRequestedModelRef, config);
   // Skip agent --list-models on the hot path (~2s); GET /v1/models still lists.
-  const decision = resolveModelWithoutCatalog({
-    requested: model,
-    defaultModel: config.defaultModel,
-  });
-  const cursorModel = decision.final;
-  rememberResolvedModel(cursorModel, lastRequestedModelRef);
+  const modelResolution = resolveRequestModel(body.model, lastRequestedModelRef, config);
+  if (!modelResolution.ok) {
+    json(res, modelResolution.status, modelResolution.body);
+    return;
+  }
+  const { cursorModel, displayModel, decision } = modelResolution;
   logModelResolution(config.verbose, decision);
-  const displayModel =
-    decision.requestedWasDefault && config.defaultModel !== "default"
-      ? config.defaultModel
-      : model;
 
   const cleanMessages = sanitizeMessages(responsesInputToMessages(body));
   const toolsText = toolsToSystemText(body.tools);
@@ -206,7 +200,7 @@ export async function handleResponses(
   }));
   logTrafficRequest(
     config.verbose,
-    model ?? cursorModel,
+    displayModel,
     trafficMessages,
     !!body.stream,
   );
@@ -346,7 +340,7 @@ export async function handleResponses(
     };
 
     const finishStream = (accumulated: string) => {
-      logTrafficResponse(config.verbose, model ?? cursorModel, accumulated, true);
+      logTrafficResponse(config.verbose, displayModel, accumulated, true);
       const promptTokens = Math.max(1, Math.round(agentPrompt.length / 4));
       const completionTokens = Math.max(1, Math.round(accumulated.length / 4));
       const completedItem = createOutputItem(itemId, "completed", accumulated);
@@ -389,6 +383,7 @@ export async function handleResponses(
       let accumulated = "";
       try {
         const outcome = await runStreamWithAccountFailover({
+          requiredModel: cursorModel,
           signal: abortController.signal,
           onCommit: ensureHeaders,
           onChunk: (chunk) => {
@@ -456,6 +451,31 @@ export async function handleResponses(
           logAccountStats(config.verbose, getAccountStats());
           return;
         }
+        if (outcome.status === "model_not_allowed") {
+        if (!headersWritten) {
+        json(res, 403, {
+        error: {
+        message: MODEL_NOT_ALLOWED_MESSAGE(outcome.model),
+        code: MODEL_NOT_ALLOWED_CODE,
+        model: outcome.model,
+        },
+        });
+        } else {
+        res.write(
+        `data: ${JSON.stringify({
+        error: {
+        message: MODEL_NOT_ALLOWED_MESSAGE(outcome.model),
+        code: MODEL_NOT_ALLOWED_CODE,
+        model: outcome.model,
+        },
+        })}\n\n`,
+        );
+        res.write("data: [DONE]\n\n");
+        res.end();
+        }
+        logAccountStats(config.verbose, getAccountStats());
+        return;
+        }
 
 
         if (outcome.status === "error") {
@@ -520,6 +540,7 @@ export async function handleResponses(
     let accumulated = "";
     try {
       const outcome = await runStreamWithAccountFailover({
+          requiredModel: cursorModel,
         signal: abortController.signal,
         onCommit: ensureHeaders,
         onChunk: (text) => {
@@ -577,6 +598,31 @@ export async function handleResponses(
         logAccountStats(config.verbose, getAccountStats());
         return;
       }
+      if (outcome.status === "model_not_allowed") {
+      if (!headersWritten) {
+      json(res, 403, {
+      error: {
+      message: MODEL_NOT_ALLOWED_MESSAGE(outcome.model),
+      code: MODEL_NOT_ALLOWED_CODE,
+      model: outcome.model,
+      },
+      });
+      } else {
+      res.write(
+      `data: ${JSON.stringify({
+      error: {
+      message: MODEL_NOT_ALLOWED_MESSAGE(outcome.model),
+      code: MODEL_NOT_ALLOWED_CODE,
+      model: outcome.model,
+      },
+      })}\n\n`,
+      );
+      res.write("data: [DONE]\n\n");
+      res.end();
+      }
+      logAccountStats(config.verbose, getAccountStats());
+      return;
+      }
 
 
       if (outcome.status === "error") {
@@ -633,6 +679,7 @@ export async function handleResponses(
         abortController.signal,
       ),
     abortController.signal,
+    { requiredModel: cursorModel },
   );
 
   if (outcome.status === "aborted") {
@@ -669,6 +716,17 @@ export async function handleResponses(
     });
     return;
   }
+  if (outcome.status === "model_not_allowed") {
+  json(res, 403, {
+  error: {
+  message: MODEL_NOT_ALLOWED_MESSAGE(outcome.model),
+  code: MODEL_NOT_ALLOWED_CODE,
+  model: outcome.model,
+  },
+  });
+  logAccountStats(config.verbose, getAccountStats());
+  return;
+  }
 
 
   if (outcome.status === "error") {
@@ -688,7 +746,7 @@ export async function handleResponses(
   }
 
   const content = (outcome.result.stdout ?? "").trim();
-  logTrafficResponse(config.verbose, model ?? cursorModel, content, false);
+  logTrafficResponse(config.verbose, displayModel, content, false);
 
   const promptTokens = Math.max(1, Math.round(agentPrompt.length / 4));
   const completionTokens = Math.max(1, Math.round(content.length / 4));

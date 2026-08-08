@@ -7,6 +7,7 @@ import type { ConfigFileState } from "./config-file.js";
 import type { ExecutionEngine } from "./execution-engine.js";
 import type { CursorExecutionMode } from "./execution-mode.js";
 import { loadEnvConfig, resolveAgentCommand, type EnvOptions } from "./env.js";
+import type { ModelAliasMap } from "./model-aliases.js";
 
 function readBridgePackageVersion(): string {
   try {
@@ -51,6 +52,8 @@ export type BridgeConfig = {
   /** Config-file layer: path, contents, warnings and per-key value sources. */
   configFile: ConfigFileState;
   defaultModel: string;
+  /** Client model id → Cursor model id (see CURSOR_BRIDGE_MODEL_ALIASES). */
+  modelAliases: ModelAliasMap;
   mode: CursorExecutionMode;
   force: boolean;
   approveMcps: boolean;
@@ -164,6 +167,7 @@ export function loadBridgeConfig(opts: EnvOptions = {}): BridgeConfig {
     corsOrigins: env.corsOrigins,
     configFile: env.configFile,
     defaultModel: env.defaultModel,
+    modelAliases: env.modelAliases,
     mode: env.mode ?? opts.mode ?? "ask",
     force: env.force,
     approveMcps: env.approveMcps,

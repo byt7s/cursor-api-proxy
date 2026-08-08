@@ -58,6 +58,7 @@ export type ProxyConfig = {
   host: string;
   port: number;
   defaultModel: string;
+  modelAliases?: Record<string, string>;
   mode: string;
   force: boolean;
   approveMcps: boolean;
@@ -109,6 +110,15 @@ export type AccountReport = {
   expiresAt: string | null;
   usage: { startOfMonth: string | null; models: AccountUsageModel[] } | null;
   usageError: string | null;
+  /** Empty = unrestricted (no `.cursor-bridge-models` allowlist). */
+  allowedModels?: string[];
+};
+
+export type AccountModelsPayload = {
+  name: string;
+  allowedModels: string[];
+  unrestricted: boolean;
+  ok?: boolean;
 };
 
 export type AccountsReport = { accounts: AccountReport[] };
@@ -191,7 +201,8 @@ export type ConfigFileType =
   | "number"
   | "boolean"
   | "string[]"
-  | "enum";
+  | "enum"
+  | "object";
 
 export type ConfigFileKeySpec = {
   key: string;
@@ -203,7 +214,12 @@ export type ConfigFileKeySpec = {
   editable: boolean;
 };
 
-export type ConfigFileValue = string | number | boolean | string[];
+export type ConfigFileValue =
+  | string
+  | number
+  | boolean
+  | string[]
+  | Record<string, string>;
 
 export type ConfigFilePayload = {
   path: string;

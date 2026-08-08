@@ -54,6 +54,7 @@ function config(overrides: Partial<BridgeConfig> = {}): BridgeConfig {
     latencyWaterfall: true,
     thoughtMode: "drop",
     toolCalls: false,
+    modelAliases: {},
     ...overrides,
   };
 }

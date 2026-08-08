@@ -75,6 +75,7 @@ function createTestConfig(overrides: Partial<BridgeConfig> = {}): BridgeConfig {
     metricsEnabled: true,
     latencyWaterfall: false,
     toolCalls: false,
+    modelAliases: {},
     maxConcurrentRuns: 16,
     maxConcurrentRunsPerAccount: 2,
     admissionWaitMs: 0,

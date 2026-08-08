@@ -63,6 +63,7 @@ describe("buildAccountsReport", () => {
           expiresAt: null,
           usage: null,
           usageError: "api_key_unsupported",
+          allowedModels: [],
         },
       ],
     });

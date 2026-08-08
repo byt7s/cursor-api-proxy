@@ -105,6 +105,7 @@ function createTestConfig(overrides: Partial<BridgeConfig> = {}): BridgeConfig {
     latencyWaterfall: true,
     thoughtMode: "drop",
     toolCalls: false,
+    modelAliases: {},
     ...overrides,
   };
 }

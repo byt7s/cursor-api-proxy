@@ -1,4 +1,5 @@
 import type {
+  AccountModelsPayload,
   AccountMutationResult,
   AccountsReport,
   AuditPayload,
@@ -172,6 +173,15 @@ export const api = {
     apiRequest<AccountMutationResult>(
       `/api/accounts/${encodeURIComponent(name)}/key`,
       { method: "PUT", body: { apiKey } },
+    ),
+  accountModels: (name: string) =>
+    apiRequest<AccountModelsPayload>(
+      `/api/accounts/${encodeURIComponent(name)}/models`,
+    ),
+  setAccountModels: (name: string, allowedModels: string[]) =>
+    apiRequest<AccountModelsPayload>(
+      `/api/accounts/${encodeURIComponent(name)}/models`,
+      { method: "PUT", body: { allowedModels } },
     ),
   removeAccount: (name: string) =>
     apiRequest<AccountMutationResult>(

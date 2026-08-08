@@ -1,3 +1,5 @@
+import { accountAllowsModel } from "./account-models.js";
+
 type AccountStatus = {
   configDir: string;
   activeRequests: number;
@@ -36,6 +38,11 @@ export type GetNextConfigDirOptions = {
    * excluded / disabled / rate-limited).
    */
   prefer?: string;
+  /**
+   * When set, skip accounts whose `.cursor-bridge-models` allowlist does not
+   * include this model (missing/empty allowlist = allow all).
+   */
+  requiredModel?: string;
   /**
    * When true (default false), if every account is rate-limited, pick the one
    * that recovers soonest. Failover paths leave this false so the caller can
@@ -81,10 +88,16 @@ export class AccountPool {
     const allowRateLimitedFallback = options.allowRateLimitedFallback ?? false;
     const prefer = options.prefer;
 
+    const requiredModel = options.requiredModel;
     const notExcluded = (exclude?.size
       ? this.accounts.filter((a) => !exclude.has(a.configDir))
       : this.accounts
-    ).filter((a) => !a.disabled);
+    )
+      .filter((a) => !a.disabled)
+      .filter(
+        (a) =>
+          !requiredModel || accountAllowsModel(a.configDir, requiredModel),
+      );
 
     if (notExcluded.length === 0) {
       return undefined;
@@ -217,6 +230,15 @@ export class AccountPool {
   public getConfigDirsCount(): number {
     return this.accounts.length;
   }
+
+  public getConfigDirs(): string[] {
+    return this.accounts.map((a) => a.configDir);
+  }
+
+  /** True when at least one pooled account allows `model` (ignore status). */
+  public anyAllowsModel(model: string): boolean {
+    return this.accounts.some((a) => accountAllowsModel(a.configDir, model));
+  }
 }
 
 // Global instance to be initialized at server start
@@ -294,4 +316,14 @@ export function getAccountStats(): AccountStat[] {
 
 export function getAccountPoolSize(): number {
   return globalPool?.getConfigDirsCount() ?? 0;
+}
+
+export function getAccountPoolConfigDirs(): string[] {
+  return globalPool?.getConfigDirs() ?? [];
+}
+
+/** True when the pool has accounts and at least one allows `model`. */
+export function anyAccountAllowsModel(model: string): boolean {
+  if (!globalPool || globalPool.getConfigDirsCount() === 0) return true;
+  return globalPool.anyAllowsModel(model);
 }

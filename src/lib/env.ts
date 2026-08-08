@@ -24,6 +24,10 @@ import {
 } from "./execution-engine.js";
 import type { CursorExecutionMode } from "./execution-mode.js";
 import { tryParseExecutionModeEnv } from "./execution-mode.js";
+import {
+  parseModelAliasesJson,
+  type ModelAliasMap,
+} from "./model-aliases.js";
 import { DEFAULT_REQUESTS_LOG_MAX_BYTES } from "./request-record.js";
 
 /** Default ceiling for JSON request bodies (8 MB). */
@@ -71,6 +75,11 @@ export type LoadedEnv = {
   /** The config-file layer: path, contents, warnings and per-key sources. */
   configFile: ConfigFileState;
   defaultModel: string;
+  /**
+   * Client model id → Cursor model id aliases
+   * (`CURSOR_BRIDGE_MODEL_ALIASES` / `modelAliases` in config.json).
+   */
+  modelAliases: ModelAliasMap;
   force: boolean;
   approveMcps: boolean;
   strictModel: boolean;
@@ -554,6 +563,9 @@ export function loadEnvConfig(opts: EnvOptions = {}): LoadedEnv {
     configFile,
     defaultModel: normalizeModelId(
       envString(env, ["CURSOR_BRIDGE_DEFAULT_MODEL"]),
+    ),
+    modelAliases: parseModelAliasesJson(
+      envString(env, ["CURSOR_BRIDGE_MODEL_ALIASES"]),
     ),
     force,
     approveMcps: envBool(env, ["CURSOR_BRIDGE_APPROVE_MCPS"], false),

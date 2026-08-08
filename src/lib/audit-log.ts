@@ -147,7 +147,9 @@ export function auditRouteFor(pathname: string): {
   target?: string;
 } {
   const withoutQuery = pathname.split("?")[0] ?? pathname;
-  const accounts = /^\/api\/accounts\/([^/]+)(\/key)?$/.exec(withoutQuery);
+  const accounts = /^\/api\/accounts\/([^/]+)(\/(?:key|models))?$/.exec(
+    withoutQuery,
+  );
   if (accounts) {
     return {
       route: `/api/accounts/:name${accounts[2] ?? ""}`,

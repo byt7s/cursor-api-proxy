@@ -6,6 +6,7 @@ import {
   readAccountApiKey,
   writeAccountApiKey,
 } from "../lib/account-api-key.js";
+import { readAccountAllowedModels } from "../lib/account-models.js";
 import { ACCOUNTS_DIR } from "./constants.js";
 import {
   readCachedToken,
@@ -72,6 +73,11 @@ export type AccountReport = {
    * plan/usage from the session and still enrich key metadata via `/v1/me`.
    */
   usageError: string | null;
+  /**
+   * Per-account model allowlist from `.cursor-bridge-models`.
+   * Empty array means unrestricted (missing/empty file).
+   */
+  allowedModels: string[];
 };
 
 export type AccountsReport = {
@@ -333,6 +339,7 @@ function toAccountReport(
     expiresAt: info.expiresAt ?? null,
     usage: liveUsage ? toUsagePayload(liveUsage) : null,
     usageError: liveUsage ? null : usageError,
+    allowedModels: readAccountAllowedModels(info.configDir) ?? [],
   };
 }
 
